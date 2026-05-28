@@ -29,6 +29,27 @@ type OAuthRefreshResult struct {
 	LockHeld       bool           // 锁被其他 worker 持有（未执行刷新）
 }
 
+type OAuthRefreshOption func(*oauthRefreshOptions)
+
+type oauthRefreshOptions struct {
+	source               string
+	checkIntervalSeconds int64
+}
+
+func WithOAuthRefreshSource(source string) OAuthRefreshOption {
+	return func(opts *oauthRefreshOptions) {
+		opts.source = strings.TrimSpace(source)
+	}
+}
+
+func WithOAuthRefreshCheckInterval(interval time.Duration) OAuthRefreshOption {
+	return func(opts *oauthRefreshOptions) {
+		if interval > 0 {
+			opts.checkIntervalSeconds = int64(interval.Seconds())
+		}
+	}
+}
+
 // OAuthRefreshAPI 统一的 OAuth Token 刷新入口
 // 封装分布式锁、进程内互斥锁、DB 重读、已刷新检查、竞争恢复等通用逻辑
 type OAuthRefreshAPI struct {
@@ -77,7 +98,16 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	account *Account,
 	executor OAuthRefreshExecutor,
 	refreshWindow time.Duration,
+	options ...OAuthRefreshOption,
 ) (*OAuthRefreshResult, error) {
+	opts := oauthRefreshOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	_ = opts
+
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）

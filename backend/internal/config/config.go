@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1334,6 +1335,7 @@ func LoadForBootstrap() (*Config, error) {
 }
 
 func load(allowMissingJWTSecret bool) (*Config, error) {
+	viper.Reset()
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 
@@ -1342,13 +1344,20 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if dataDir := os.Getenv("DATA_DIR"); dataDir != "" {
 		viper.AddConfigPath(dataDir)
 	}
-	// 2. Docker data directory
-	viper.AddConfigPath("/app/data")
-	// 3. Current directory
+	// 2. Current directory
 	viper.AddConfigPath(".")
-	// 4. Config subdirectory
+	// 3. Repository layout when started from project root on Windows/local runs
+	viper.AddConfigPath("./backend")
+	// 4. Walk upwards so nested backend entrypoints still find backend/config.yaml
+	for _, dir := range upwardConfigDirs() {
+		viper.AddConfigPath(dir)
+		viper.AddConfigPath(filepath.Join(dir, "backend"))
+	}
+	// 5. Config subdirectory
 	viper.AddConfigPath("./config")
-	// 5. System config directory
+	// 6. Docker data directory fallback. DATA_DIR remains the explicit override.
+	viper.AddConfigPath("/app/data")
+	// 7. System config directory
 	viper.AddConfigPath("/etc/sub2api")
 
 	// 环境变量支持
@@ -1364,11 +1373,20 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		// 配置文件不存在时使用默认值
 	}
+	configFileUsed := viper.ConfigFileUsed()
+	workingDir, _ := os.Getwd()
 
 	var cfg Config
 	if err := viper.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config error: %w", err)
 	}
+
+	slog.Info("config.loaded",
+		"config_file", configFileUsed,
+		"working_dir", workingDir,
+		"token_refresh_check_interval_minutes", cfg.TokenRefresh.CheckIntervalMinutes,
+		"token_refresh_refresh_before_expiry_hours", cfg.TokenRefresh.RefreshBeforeExpiryHours,
+	)
 
 	cfg.RunMode = NormalizeRunMode(cfg.RunMode)
 	cfg.Server.Mode = strings.ToLower(strings.TrimSpace(cfg.Server.Mode))
@@ -1491,6 +1509,23 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+func upwardConfigDirs() []string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for {
+		dirs = append(dirs, wd)
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			break
+		}
+		wd = parent
+	}
+	return dirs
 }
 
 func setDefaults() {
@@ -2804,7 +2839,9 @@ func GetServerAddress() string {
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	v.AddConfigPath(".")
+	v.AddConfigPath("./backend")
 	v.AddConfigPath("./config")
+	v.AddConfigPath("/app/data")
 	v.AddConfigPath("/etc/sub2api")
 
 	// Support SERVER_HOST and SERVER_PORT environment variables

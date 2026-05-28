@@ -81,6 +81,94 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadFindsBackendConfigFromProjectRoot(t *testing.T) {
+	projectRoot := t.TempDir()
+	backendDir := filepath.Join(projectRoot, "backend")
+	require.NoError(t, os.MkdirAll(backendDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(backendDir, "config.yaml"), []byte(`
+jwt:
+  secret: "`+strings.Repeat("x", 32)+`"
+token_refresh:
+  enabled: true
+  check_interval_minutes: 5
+  refresh_before_expiry_hours: 12
+`), 0644))
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(projectRoot))
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, 5, cfg.TokenRefresh.CheckIntervalMinutes)
+	require.Equal(t, 12.0, cfg.TokenRefresh.RefreshBeforeExpiryHours)
+}
+
+func TestLoadFindsBackendConfigFromNestedServerDir(t *testing.T) {
+	projectRoot := t.TempDir()
+	backendDir := filepath.Join(projectRoot, "backend")
+	serverDir := filepath.Join(backendDir, "cmd", "server")
+	require.NoError(t, os.MkdirAll(serverDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(backendDir, "config.yaml"), []byte(`
+jwt:
+  secret: "`+strings.Repeat("x", 32)+`"
+token_refresh:
+  enabled: true
+  check_interval_minutes: 5
+  refresh_before_expiry_hours: 12
+`), 0644))
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(serverDir))
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, 5, cfg.TokenRefresh.CheckIntervalMinutes)
+	require.Equal(t, 12.0, cfg.TokenRefresh.RefreshBeforeExpiryHours)
+}
+
+func TestLoadPrefersProjectBackendConfigOverAppDataFallback(t *testing.T) {
+	projectRoot := t.TempDir()
+	appDataDir := filepath.Join(projectRoot, "app", "data")
+	backendDir := filepath.Join(projectRoot, "backend")
+	require.NoError(t, os.MkdirAll(appDataDir, 0755))
+	require.NoError(t, os.MkdirAll(backendDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(appDataDir, "config.yaml"), []byte(`
+jwt:
+  secret: "`+strings.Repeat("x", 32)+`"
+token_refresh:
+  enabled: true
+  check_interval_minutes: 5
+  refresh_before_expiry_hours: 0.5
+`), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(backendDir, "config.yaml"), []byte(`
+jwt:
+  secret: "`+strings.Repeat("x", 32)+`"
+token_refresh:
+  enabled: true
+  check_interval_minutes: 5
+  refresh_before_expiry_hours: 12
+`), 0644))
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(projectRoot))
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, 12.0, cfg.TokenRefresh.RefreshBeforeExpiryHours)
+}
+
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 

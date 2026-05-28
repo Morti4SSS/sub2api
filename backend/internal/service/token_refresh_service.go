@@ -176,6 +176,10 @@ func (s *TokenRefreshService) processRefresh() {
 
 	// 计算刷新窗口
 	refreshWindow := time.Duration(s.cfg.RefreshBeforeExpiryHours * float64(time.Hour))
+	checkInterval := time.Duration(s.cfg.CheckIntervalMinutes) * time.Minute
+	if checkInterval < time.Minute {
+		checkInterval = 5 * time.Minute
+	}
 
 	// 获取所有active状态的账号
 	accounts, err := s.listActiveAccounts(ctx)
@@ -214,7 +218,7 @@ func (s *TokenRefreshService) processRefresh() {
 			}
 
 			// 执行刷新
-			if err := s.refreshWithRetry(ctx, account, refresher, executor, refreshWindow); err != nil {
+			if err := s.refreshWithRetry(ctx, account, refresher, executor, refreshWindow, checkInterval); err != nil {
 				if errors.Is(err, errRefreshSkipped) {
 					skipped++
 				} else {
@@ -262,8 +266,12 @@ func (s *TokenRefreshService) listActiveAccounts(ctx context.Context) ([]Account
 }
 
 // refreshWithRetry 带重试的刷新
-func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Account, refresher TokenRefresher, executor OAuthRefreshExecutor, refreshWindow time.Duration) error {
+func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Account, refresher TokenRefresher, executor OAuthRefreshExecutor, refreshWindow time.Duration, checkInterval ...time.Duration) error {
 	var lastErr error
+	var interval time.Duration
+	if len(checkInterval) > 0 {
+		interval = checkInterval[0]
+	}
 
 	for attempt := 1; attempt <= s.cfg.MaxRetries; attempt++ {
 		var newCredentials map[string]any
@@ -271,7 +279,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 		// 优先使用统一 API（带分布式锁 + DB 重读保护）
 		if s.refreshAPI != nil && executor != nil {
-			result, refreshErr := s.refreshAPI.RefreshIfNeeded(ctx, account, executor, refreshWindow)
+			result, refreshErr := s.refreshAPI.RefreshIfNeeded(ctx, account, executor, refreshWindow, WithOAuthRefreshSource("background"), WithOAuthRefreshCheckInterval(interval))
 			if refreshErr != nil {
 				err = refreshErr
 			} else if result.LockHeld {
@@ -302,6 +310,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 
 		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
 		if isNonRetryableRefreshError(err) {
+			s.recordBackgroundRefreshFailure(ctx, account, err, refreshWindow)
 			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
 			s.notifyAccountSchedulingBlocked(account, time.Time{}, "token_refresh_non_retryable")
 			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
@@ -359,8 +368,27 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			"until", until.Format(time.RFC3339),
 		)
 	}
+	s.recordBackgroundRefreshFailure(ctx, account, lastErr, refreshWindow)
 
 	return lastErr
+}
+
+func (s *TokenRefreshService) recordBackgroundRefreshFailure(ctx context.Context, account *Account, refreshErr error, refreshWindow time.Duration) {
+	if account == nil || refreshErr == nil {
+		return
+	}
+	credentials := cloneCredentials(account.Credentials)
+	now := time.Now().UTC()
+	credentials["_token_refresh_background_last_checked_at"] = now.Format(time.RFC3339)
+	credentials["_token_refresh_background_last_error_at"] = now.Format(time.RFC3339)
+	credentials["_token_refresh_background_last_error"] = refreshErr.Error()
+	credentials["_token_refresh_background_refresh_before_seconds"] = int64(refreshWindow.Seconds())
+	if err := persistAccountCredentials(ctx, s.accountRepo, account, credentials); err != nil {
+		slog.Warn("token_refresh.record_background_failure_failed",
+			"account_id", account.ID,
+			"error", err,
+		)
+	}
 }
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）

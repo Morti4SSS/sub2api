@@ -197,6 +197,36 @@ func TestTokenRefreshService_RefreshWithRetry_NilInvalidator(t *testing.T) {
 	require.Equal(t, 1, repo.updateCalls)
 }
 
+func TestTokenRefreshService_RefreshWithRetry_BackgroundFailureRecordsMetadata(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			MaxRetries:          1,
+			RetryBackoffSeconds: 0,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	account := &Account{
+		ID:       18,
+		Platform: PlatformGemini,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":  "old-at",
+			"refresh_token": "old-rt",
+		},
+	}
+	refresher := &tokenRefresherStub{err: errors.New("invalid_grant: revoked")}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, nil, 30*time.Minute)
+
+	require.Error(t, err)
+	require.NotNil(t, repo.lastAccount)
+	require.NotEmpty(t, repo.lastAccount.Credentials["_token_refresh_background_last_checked_at"])
+	require.NotEmpty(t, repo.lastAccount.Credentials["_token_refresh_background_last_error_at"])
+	require.Contains(t, repo.lastAccount.Credentials["_token_refresh_background_last_error"], "invalid_grant")
+	require.Equal(t, int64(1800), repo.lastAccount.Credentials["_token_refresh_background_refresh_before_seconds"])
+}
+
 // TestTokenRefreshService_RefreshWithRetry_Antigravity 测试 Antigravity 平台的缓存失效
 func TestTokenRefreshService_RefreshWithRetry_Antigravity(t *testing.T) {
 	repo := &tokenRefreshAccountRepo{}
