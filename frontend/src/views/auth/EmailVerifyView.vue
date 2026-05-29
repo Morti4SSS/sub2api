@@ -171,6 +171,7 @@ import {
 import {
   clearAllAffiliateReferralCodes,
   loadAffiliateReferralCode,
+  loadOAuthAffiliateCode,
   oauthAffiliatePayload
 } from '@/utils/oauthAffiliate'
 
@@ -267,7 +268,7 @@ onMounted(async () => {
       initialTurnstileToken.value = registerData.turnstile_token || ''
       promoCode.value = registerData.promo_code || ''
       invitationCode.value = registerData.invitation_code || ''
-      affCode.value = registerData.aff_code || loadAffiliateReferralCode()
+      affCode.value = registerData.aff_code || loadOAuthAffiliateCode() || loadAffiliateReferralCode()
       pendingAuthToken.value = registerData.pending_auth_token || activePendingSession?.token || ''
       pendingAuthTokenField.value = registerData.pending_auth_token_field || activePendingSession?.token_field || 'pending_auth_token'
       pendingProvider.value = registerData.pending_provider || activePendingSession?.provider || ''
@@ -287,6 +288,7 @@ onMounted(async () => {
     pendingAuthTokenField.value = activePendingSession.token_field
     pendingProvider.value = activePendingSession.provider
     pendingRedirect.value = activePendingSession.redirect || ''
+    affCode.value = loadOAuthAffiliateCode() || loadAffiliateReferralCode()
   }
 
   // Load public settings
@@ -391,6 +393,23 @@ function persistPendingOAuthSession(provider: string, redirect?: string): void {
     provider: provider.trim() || pendingProvider.value.trim(),
     redirect: redirect || pendingRedirect.value || undefined,
   })
+}
+
+function buildPendingOAuthCreateAccountPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    email: email.value,
+    password: password.value,
+    verify_code: verifyCode.value.trim()
+  }
+  if (invitationCode.value) {
+    payload.invitation_code = invitationCode.value
+  }
+  Object.assign(payload, oauthAffiliatePayload(affCode.value || loadOAuthAffiliateCode() || loadAffiliateReferralCode()))
+  if (pendingAdoptionDecision.value) {
+    payload.adopt_display_name = pendingAdoptionDecision.value.adoptDisplayName
+    payload.adopt_avatar = pendingAdoptionDecision.value.adoptAvatar
+  }
+  return payload
 }
 
 // ==================== Send Code ====================
@@ -502,15 +521,7 @@ async function handleVerify(): Promise<void> {
     if (isPendingOAuthFlow()) {
       const { data } = await apiClient.post<PendingOAuthCreateAccountResponse>(
         '/auth/oauth/pending/create-account',
-        {
-          email: email.value,
-          password: password.value,
-          verify_code: verifyCode.value.trim(),
-          invitation_code: invitationCode.value || undefined,
-          ...oauthAffiliatePayload(affCode.value || loadAffiliateReferralCode()),
-          adopt_display_name: pendingAdoptionDecision.value?.adoptDisplayName,
-          adopt_avatar: pendingAdoptionDecision.value?.adoptAvatar
-        }
+        buildPendingOAuthCreateAccountPayload()
       )
       if (isPendingOAuthSessionResponse(data)) {
         sessionStorage.removeItem('register_data')

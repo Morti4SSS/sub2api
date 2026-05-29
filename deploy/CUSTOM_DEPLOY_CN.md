@@ -104,6 +104,64 @@ deploy/data/config.yaml
 - 本地开发和 Docker 部署都更容易复用配置
 - 迁移 VPS 时不需要把配置硬编码进镜像
 
+## 账号 JSON 加密备份
+
+这个备份是为了保护账号 JSON 里的 refresh token、access token 等敏感信息。推荐方式是：VPS 只保存加密快照和公钥，本机保存私钥，并定时把加密快照拉回本机解密成本地 JSON。
+
+1. 在本机生成密钥
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out account_backup_private.pem
+openssl rsa -pubout -in account_backup_private.pem -out account_backup_public.pem
+```
+
+2. 只把公钥上传到服务器
+
+```bash
+cp account_backup_public.pem deploy/data/account_backup_public.pem
+```
+
+私钥 `account_backup_private.pem` 不要上传 VPS，也不要提交到 Git。
+
+3. 在 `deploy/.env` 启用服务端加密快照
+
+```env
+ACCOUNT_JSON_BACKUP_ENABLED=true
+ACCOUNT_JSON_BACKUP_PUBLIC_KEY_FILE=/app/data/account_backup_public.pem
+ACCOUNT_JSON_BACKUP_DIR=/app/data/account_backups
+ACCOUNT_JSON_BACKUP_SERVER_RETAIN_COUNT=5
+ACCOUNT_JSON_BACKUP_DEBOUNCE_SECONDS=120
+```
+
+启用后，账号凭证变更、手动令牌刷新、后台令牌刷新成功时会触发备份。批量刷新场景会做防抖，不会每个账号都生成一份快照。
+
+4. 本机配置同步脚本
+
+复制示例配置：
+
+```powershell
+Copy-Item deploy\scripts\account-backup-sync.example.env deploy\scripts\account-backup-sync.env
+```
+
+填写这些值：
+
+```env
+SUB2API_BASE_URL=https://你的域名
+SUB2API_ADMIN_API_KEY=后台设置里的 Admin API Key
+ACCOUNT_BACKUP_PRIVATE_KEY_FILE=C:\sub2api-backup\account_backup_private.pem
+ACCOUNT_BACKUP_OUTPUT_DIR=C:\sub2api-backup\json
+ACCOUNT_BACKUP_ENCRYPTED_DIR=C:\sub2api-backup\encrypted
+ACCOUNT_BACKUP_RETAIN_COUNT=10
+```
+
+然后在本机运行：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File deploy\scripts\account-backup-sync.ps1 -Config deploy\scripts\account-backup-sync.env
+```
+
+Windows 任务计划程序里也用同一条命令即可。`ACCOUNT_BACKUP_RETAIN_COUNT=10` 表示本机只保留最近 10 份解密 JSON，超过后自动删除最旧的；加密缓存也会按同样数量保留。
+
 ## 后续迁移 VPS
 
 迁移时，核心是带走“代码版本”和“数据目录”：
@@ -121,6 +179,8 @@ docker compose -f deploy/docker-compose.local.yml -f deploy/docker-compose.custo
 - `deploy/data/`
 - `deploy/postgres_data/`
 - `deploy/redis_data/`
+
+如果启用了账号 JSON 加密备份，`deploy/data/` 里会包含公钥和服务器端加密快照；本机私钥和已解密 JSON 不属于 VPS 迁移内容，只需要继续保存在你的本机备份目录。
 
 3. 到新机器后重新执行：
 

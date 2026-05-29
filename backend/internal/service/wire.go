@@ -60,6 +60,7 @@ func ProvideTokenRefreshService(
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
 	runtimeBlocker AccountRuntimeBlocker,
+	accountBackupNotifier AccountCredentialsChangeNotifier,
 ) *TokenRefreshService {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache)
 	// 注入 OpenAI privacy opt-out 依赖
@@ -69,6 +70,7 @@ func ProvideTokenRefreshService(
 	// 调用侧显式注入后台刷新策略，避免策略漂移
 	svc.SetRefreshPolicy(DefaultBackgroundRefreshPolicy())
 	svc.SetAccountRuntimeBlocker(runtimeBlocker)
+	svc.SetAccountBackupNotifier(accountBackupNotifier)
 	svc.Start()
 	return svc
 }
@@ -479,6 +481,8 @@ var ProviderSet = wire.NewSet(
 	NewAccountTestService,
 	ProvideSettingService,
 	NewDataManagementService,
+	NewAccountBackupServiceFromEnv,
+	wire.Bind(new(AccountCredentialsChangeNotifier), new(*AccountBackupService)),
 	ProvideBackupService,
 	ProvideOpsSystemLogSink,
 	NewOpsService,

@@ -159,21 +159,22 @@ type Account struct {
 	Type     string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
-	Credentials        map[string]any  `json:"credentials"`
-	CredentialsStatus  map[string]bool `json:"credentials_status,omitempty"`
-	Extra              map[string]any  `json:"extra"`
-	ProxyID            *int64          `json:"proxy_id"`
-	Concurrency        int             `json:"concurrency"`
-	LoadFactor         *int            `json:"load_factor,omitempty"`
-	Priority           int             `json:"priority"`
-	RateMultiplier     float64         `json:"rate_multiplier"`
-	Status             string          `json:"status"`
-	ErrorMessage       string          `json:"error_message"`
-	LastUsedAt         *time.Time      `json:"last_used_at"`
-	ExpiresAt          *int64          `json:"expires_at"`
-	AutoPauseOnExpired bool            `json:"auto_pause_on_expired"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	Credentials        map[string]any     `json:"credentials"`
+	CredentialsStatus  map[string]bool    `json:"credentials_status,omitempty"`
+	Extra              map[string]any     `json:"extra"`
+	ProxyID            *int64             `json:"proxy_id"`
+	Concurrency        int                `json:"concurrency"`
+	LoadFactor         *int               `json:"load_factor,omitempty"`
+	Priority           int                `json:"priority"`
+	RateMultiplier     float64            `json:"rate_multiplier"`
+	Status             string             `json:"status"`
+	ErrorMessage       string             `json:"error_message"`
+	LastUsedAt         *time.Time         `json:"last_used_at"`
+	ExpiresAt          *int64             `json:"expires_at"`
+	AutoPauseOnExpired bool               `json:"auto_pause_on_expired"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+	TokenRefreshState  *TokenRefreshState `json:"token_refresh_state,omitempty"`
 
 	Schedulable bool `json:"schedulable"`
 
@@ -255,6 +256,28 @@ type Account struct {
 
 	GroupIDs []int64  `json:"group_ids,omitempty"`
 	Groups   []*Group `json:"groups,omitempty"`
+}
+
+type TokenRefreshState struct {
+	AccessTokenExpiresAt         *time.Time `json:"access_token_expires_at,omitempty"`
+	RefreshWindowStartsAt        *time.Time `json:"refresh_window_starts_at,omitempty"`
+	CheckIntervalSeconds         int64      `json:"check_interval_seconds"`
+	RefreshBeforeSeconds         int64      `json:"refresh_before_seconds"`
+	LastAttemptAt                *time.Time `json:"last_attempt_at,omitempty"`
+	LastSuccessAt                *time.Time `json:"last_success_at,omitempty"`
+	LastErrorAt                  *time.Time `json:"last_error_at,omitempty"`
+	LastSource                   string     `json:"last_source,omitempty"`
+	LastResult                   string     `json:"last_result,omitempty"`
+	LastError                    string     `json:"last_error,omitempty"`
+	AccessTokenStatus            string     `json:"access_token_status,omitempty"`
+	RefreshTokenStatus           string     `json:"refresh_token_status,omitempty"`
+	RiskLevel                    string     `json:"risk_level,omitempty"`
+	BackgroundLastCheckedAt      *time.Time `json:"background_last_checked_at,omitempty"`
+	BackgroundLastSuccessAt      *time.Time `json:"background_last_success_at,omitempty"`
+	BackgroundLastErrorAt        *time.Time `json:"background_last_error_at,omitempty"`
+	BackgroundLastError          string     `json:"background_last_error,omitempty"`
+	BackgroundRefreshTokenSaved  *bool      `json:"background_refresh_token_saved,omitempty"`
+	BackgroundRefreshTokenStatus string     `json:"background_refresh_token_status,omitempty"`
 }
 
 type AccountGroup struct {

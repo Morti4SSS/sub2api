@@ -1,6 +1,9 @@
 package admin
 
 import (
+	"fmt"
+	"net/http"
+
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -8,15 +11,49 @@ import (
 )
 
 type BackupHandler struct {
-	backupService *service.BackupService
-	userService   *service.UserService
+	backupService        *service.BackupService
+	userService          *service.UserService
+	accountBackupService *service.AccountBackupService
 }
 
-func NewBackupHandler(backupService *service.BackupService, userService *service.UserService) *BackupHandler {
-	return &BackupHandler{
-		backupService: backupService,
-		userService:   userService,
+func NewBackupHandler(backupService *service.BackupService, userService *service.UserService, accountBackupService ...*service.AccountBackupService) *BackupHandler {
+	var accountSvc *service.AccountBackupService
+	if len(accountBackupService) > 0 {
+		accountSvc = accountBackupService[0]
 	}
+	return &BackupHandler{
+		backupService:        backupService,
+		userService:          userService,
+		accountBackupService: accountSvc,
+	}
+}
+
+func (h *BackupHandler) ListAccountBackups(c *gin.Context) {
+	if h.accountBackupService == nil {
+		response.Success(c, gin.H{"items": []service.AccountBackupSnapshot{}})
+		return
+	}
+	snapshots, err := h.accountBackupService.ListSnapshots(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"items": snapshots})
+}
+
+func (h *BackupHandler) DownloadAccountBackup(c *gin.Context) {
+	name := c.Param("name")
+	if h.accountBackupService == nil {
+		response.NotFound(c, "account backup snapshot not found")
+		return
+	}
+	data, err := h.accountBackupService.ReadSnapshotFile(c.Request.Context(), name)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+	c.Data(http.StatusOK, "application/octet-stream", data)
 }
 
 // ─── S3 配置 ───

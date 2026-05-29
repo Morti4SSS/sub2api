@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -58,6 +59,8 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	tokenRefreshConfig      *config.TokenRefreshConfig
+	accountBackupNotifier   service.AccountCredentialsChangeNotifier
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -75,7 +78,12 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	cfg ...*config.Config,
 ) *AccountHandler {
+	var tokenRefreshConfig *config.TokenRefreshConfig
+	if len(cfg) > 0 && cfg[0] != nil {
+		tokenRefreshConfig = &cfg[0].TokenRefresh
+	}
 	return &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
@@ -90,7 +98,23 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
+		tokenRefreshConfig:      tokenRefreshConfig,
 	}
+}
+
+func (h *AccountHandler) SetTokenRefreshConfig(cfg *config.TokenRefreshConfig) {
+	h.tokenRefreshConfig = cfg
+}
+
+func (h *AccountHandler) SetAccountBackupNotifier(notifier service.AccountCredentialsChangeNotifier) {
+	h.accountBackupNotifier = notifier
+}
+
+func (h *AccountHandler) notifyAccountCredentialsChanged(ctx context.Context, reason string) {
+	if h == nil || h.accountBackupNotifier == nil {
+		return
+	}
+	h.accountBackupNotifier.NotifyCredentialsChanged(ctx, reason)
 }
 
 // CreateAccountRequest represents create account request
@@ -178,11 +202,27 @@ type AccountWithConcurrency struct {
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
+const (
+	defaultBatchRefreshConcurrency = 10
+	maxBatchRefreshConcurrency     = 10
+)
+
+func normalizeBatchRefreshConcurrency(value int) int {
+	if value <= 0 {
+		return defaultBatchRefreshConcurrency
+	}
+	if value > maxBatchRefreshConcurrency {
+		return maxBatchRefreshConcurrency
+	}
+	return value
+}
+
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	item := AccountWithConcurrency{
 		Account:            dto.AccountFromService(account),
 		CurrentConcurrency: 0,
 	}
+	item.TokenRefreshState = h.buildTokenRefreshState(account)
 	if account == nil {
 		return item
 	}
@@ -355,6 +395,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 			Account:            dto.AccountFromService(acc),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 		}
+		item.TokenRefreshState = h.buildTokenRefreshState(acc)
 
 		// 添加窗口费用（仅当启用时）
 		if windowCosts != nil {
@@ -391,6 +432,211 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 
 	response.Paginated(c, result, total, page, pageSize)
+}
+
+func (h *AccountHandler) buildTokenRefreshState(account *service.Account) *dto.TokenRefreshState {
+	if account == nil || account.Type != service.AccountTypeOAuth {
+		return nil
+	}
+
+	checkInterval := 5 * time.Minute
+	refreshBefore := 12 * time.Hour
+	if h.tokenRefreshConfig != nil {
+		if h.tokenRefreshConfig.CheckIntervalMinutes > 0 {
+			checkInterval = time.Duration(h.tokenRefreshConfig.CheckIntervalMinutes) * time.Minute
+		}
+		if h.tokenRefreshConfig.RefreshBeforeExpiryHours > 0 {
+			refreshBefore = time.Duration(h.tokenRefreshConfig.RefreshBeforeExpiryHours * float64(time.Hour))
+		}
+	}
+	if checkInterval < time.Minute {
+		checkInterval = 5 * time.Minute
+	}
+
+	state := &dto.TokenRefreshState{
+		CheckIntervalSeconds:         int64(checkInterval.Seconds()),
+		RefreshBeforeSeconds:         int64(refreshBefore.Seconds()),
+		LastAttemptAt:                credentialTime(account, "_token_refresh_last_attempt_at"),
+		LastSuccessAt:                credentialTime(account, "_token_refresh_last_success_at"),
+		LastErrorAt:                  credentialTime(account, "_token_refresh_last_error_at"),
+		LastSource:                   account.GetCredential("_token_refresh_last_source"),
+		LastResult:                   account.GetCredential("_token_refresh_last_result"),
+		LastError:                    account.GetCredential("_token_refresh_last_error"),
+		AccessTokenStatus:            account.GetCredential("_token_refresh_at_status"),
+		RefreshTokenStatus:           account.GetCredential("_token_refresh_rt_status"),
+		BackgroundLastCheckedAt:      credentialTime(account, "_token_refresh_background_last_checked_at"),
+		BackgroundLastSuccessAt:      credentialTime(account, "_token_refresh_background_last_success_at"),
+		BackgroundLastErrorAt:        credentialTime(account, "_token_refresh_background_last_error_at"),
+		BackgroundLastError:          account.GetCredential("_token_refresh_background_last_error"),
+		BackgroundRefreshTokenStatus: account.GetCredential("_token_refresh_background_rt_status"),
+	}
+	if saved, ok := credentialBool(account, "_token_refresh_background_rt_saved"); ok {
+		state.BackgroundRefreshTokenSaved = &saved
+	}
+	if h.tokenRefreshConfig == nil {
+		if seconds := account.GetCredentialAsInt64("_token_refresh_background_refresh_before_seconds"); seconds > 0 {
+			state.RefreshBeforeSeconds = seconds
+		}
+		if seconds := account.GetCredentialAsInt64("_token_refresh_refresh_before_seconds"); seconds > 0 {
+			state.RefreshBeforeSeconds = seconds
+		}
+		if seconds := account.GetCredentialAsInt64("_token_refresh_check_interval_seconds"); seconds > 0 {
+			state.CheckIntervalSeconds = seconds
+		}
+		if seconds := account.GetCredentialAsInt64("_token_refresh_background_check_interval_seconds"); seconds > 0 {
+			state.CheckIntervalSeconds = seconds
+		}
+	}
+	if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
+		state.AccessTokenExpiresAt = expiresAt
+		windowStart := expiresAt.Add(-time.Duration(state.RefreshBeforeSeconds) * time.Second)
+		state.RefreshWindowStartsAt = &windowStart
+	}
+	state.RiskLevel = tokenRefreshRiskLevel(account, state)
+	return state
+}
+
+func tokenRefreshRiskLevel(account *service.Account, state *dto.TokenRefreshState) string {
+	if account == nil || state == nil {
+		return ""
+	}
+	if state.LastResult == "failed" || state.LastResult == "save_failed" || state.BackgroundLastError != "" {
+		return "failed"
+	}
+	if state.LastResult == "" && state.RefreshTokenStatus == "" && state.BackgroundRefreshTokenStatus == "" {
+		return "unknown"
+	}
+	rtStatus := strings.TrimSpace(state.RefreshTokenStatus)
+	if rtStatus == "" {
+		rtStatus = strings.TrimSpace(state.BackgroundRefreshTokenStatus)
+	}
+	if rtStatus == "" {
+		return "unknown"
+	}
+	if rtStatus == "rotated" || rtStatus == "saved_no_previous" {
+		return "ok"
+	}
+	if rtStatus == "missing_after_refresh" || rtStatus == "save_failed" {
+		return "high_risk"
+	}
+	if rtStatus == "unchanged" || rtStatus == "response_missing_preserved_old" {
+		if account.Platform == service.PlatformOpenAI || account.Platform == service.PlatformAnthropic {
+			return "high_risk"
+		}
+		return "watch"
+	}
+	return "unknown"
+}
+
+func credentialTime(account *service.Account, key string) *time.Time {
+	if account == nil {
+		return nil
+	}
+	value := strings.TrimSpace(account.GetCredential(key))
+	if value == "" {
+		return nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return &parsed
+	}
+	return account.GetCredentialAsTime(key)
+}
+
+func credentialBool(account *service.Account, key string) (bool, bool) {
+	if account == nil || account.Credentials == nil {
+		return false, false
+	}
+	raw, ok := account.Credentials[key]
+	if !ok || raw == nil {
+		return false, false
+	}
+	switch v := raw.(type) {
+	case bool:
+		return v, true
+	case string:
+		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
+		return parsed, err == nil
+	default:
+		return false, false
+	}
+}
+
+func firstNonEmptyTokenRefreshSource(values []string, fallback string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return fallback
+}
+
+func annotateManualTokenRefresh(credentials map[string]any, oldAccount *service.Account, source, result string, refreshErr error) {
+	if credentials == nil {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "manual_single"
+	}
+	credentials["_token_refresh_last_source"] = source
+	credentials["_token_refresh_last_attempt_at"] = now
+	credentials["_token_refresh_last_checked_at"] = now
+	credentials["_token_refresh_last_result"] = result
+	credentials["_token_refresh_at_status"] = classifyTokenRefreshAccessTokenStatus(oldAccount, credentials, result)
+	savedRT, rtStatus := classifyTokenRefreshRefreshTokenStatus(oldAccount, credentials, result)
+	credentials["_token_refresh_rt_saved"] = savedRT
+	credentials["_token_refresh_rt_status"] = rtStatus
+	if result == "success" {
+		credentials["_token_refresh_last_success_at"] = now
+		credentials["_token_refresh_last_error_at"] = ""
+		credentials["_token_refresh_last_error"] = ""
+		return
+	}
+	if refreshErr != nil {
+		credentials["_token_refresh_last_error_at"] = now
+		credentials["_token_refresh_last_error"] = refreshErr.Error()
+	}
+}
+
+func classifyTokenRefreshAccessTokenStatus(oldAccount *service.Account, credentials map[string]any, result string) string {
+	if result != "success" {
+		return "failed"
+	}
+	before := ""
+	if oldAccount != nil {
+		before = oldAccount.GetCredential("expires_at")
+	}
+	after := (&service.Account{Credentials: credentials}).GetCredential("expires_at")
+	switch {
+	case after == "":
+		return "missing_after_refresh"
+	case before != "" && before != after:
+		return "refreshed"
+	default:
+		return "unchanged"
+	}
+}
+
+func classifyTokenRefreshRefreshTokenStatus(oldAccount *service.Account, credentials map[string]any, result string) (bool, string) {
+	if result != "success" {
+		return false, "failed"
+	}
+	oldRT := ""
+	if oldAccount != nil {
+		oldRT = oldAccount.GetCredential("refresh_token")
+	}
+	newRT := (&service.Account{Credentials: credentials}).GetCredential("refresh_token")
+	switch {
+	case newRT == "":
+		return false, "missing_after_refresh"
+	case oldRT == "":
+		return true, "saved_no_previous"
+	case oldRT != newRT:
+		return true, "rotated"
+	default:
+		return true, "unchanged"
+	}
 }
 
 func buildAccountsListETag(
@@ -558,6 +804,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		h.adminService.ForceAntigravityPrivacy(ctx, account)
 		// OpenAI OAuth: 新账号直接设置隐私
 		h.adminService.ForceOpenAIPrivacy(ctx, account)
+		h.notifyAccountCredentialsChanged(ctx, "account_create")
 		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 	if err != nil {
@@ -649,6 +896,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	// 异步执行，探测失败不影响账号更新响应。
 	if len(req.Credentials) > 0 {
 		h.scheduleOpenAIResponsesProbe(account)
+		h.notifyAccountCredentialsChanged(c.Request.Context(), "account_update")
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
@@ -828,7 +1076,7 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
-func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
+func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account, source ...string) (*service.Account, string, error) {
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
@@ -891,6 +1139,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 				return nil, "", fmt.Errorf("failed to update credentials: %w", updateErr)
 			}
 			h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
+			h.notifyAccountCredentialsChanged(ctx, "manual_token_refresh")
 			return updatedAccount, "missing_project_id_temporary", nil
 		}
 
@@ -926,6 +1175,8 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 	}
 
+	annotateManualTokenRefresh(newCredentials, account, firstNonEmptyTokenRefreshSource(source, "manual_single"), "success", nil)
+
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
 		Credentials: newCredentials,
 	})
@@ -944,6 +1195,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	h.adminService.EnsureOpenAIPrivacy(ctx, updatedAccount)
 	// Antigravity OAuth: 刷新成功后检查并设置 privacy_mode
 	h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
+	h.notifyAccountCredentialsChanged(ctx, "manual_token_refresh")
 
 	return updatedAccount, "", nil
 }
@@ -1071,6 +1323,7 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 			)
 		}
 	}
+	h.notifyAccountCredentialsChanged(ctx, "apply_oauth_credentials")
 
 	response.Success(c, h.buildAccountResponseWithRuntime(ctx, updatedAccount))
 }
@@ -1204,7 +1457,8 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 // POST /api/v1/admin/accounts/batch-refresh
 func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 	var req struct {
-		AccountIDs []int64 `json:"account_ids"`
+		AccountIDs  []int64 `json:"account_ids"`
+		Concurrency int     `json:"concurrency"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -1231,7 +1485,7 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 		}
 	}
 
-	const maxConcurrency = 10
+	maxConcurrency := normalizeBatchRefreshConcurrency(req.Concurrency)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrency)
 
@@ -1258,7 +1512,7 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 			continue
 		}
 		g.Go(func() error {
-			_, warning, err := h.refreshSingleAccount(gctx, acc)
+			_, warning, err := h.refreshSingleAccount(gctx, acc, "manual_batch")
 			mu.Lock()
 			if err != nil {
 				failedCount++
@@ -1286,11 +1540,12 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"total":    len(req.AccountIDs),
-		"success":  successCount,
-		"failed":   failedCount,
-		"errors":   errors,
-		"warnings": warnings,
+		"total":       len(req.AccountIDs),
+		"success":     successCount,
+		"failed":      failedCount,
+		"concurrency": maxConcurrency,
+		"errors":      errors,
+		"warnings":    warnings,
 	})
 }
 
@@ -1491,6 +1746,9 @@ func (h *AccountHandler) BatchUpdateCredentials(c *gin.Context) {
 			"success":    true,
 		})
 	}
+	if success > 0 {
+		h.notifyAccountCredentialsChanged(ctx, "batch_update_credentials")
+	}
 
 	response.Success(c, gin.H{
 		"success":     success,
@@ -1573,6 +1831,9 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		}
 		response.ErrorFrom(c, err)
 		return
+	}
+	if len(req.Credentials) > 0 {
+		h.notifyAccountCredentialsChanged(c.Request.Context(), "bulk_update_credentials")
 	}
 
 	response.Success(c, result)

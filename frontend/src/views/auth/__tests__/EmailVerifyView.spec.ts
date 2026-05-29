@@ -307,6 +307,7 @@ describe('EmailVerifyView', () => {
         password: 'secret-123',
       })
     )
+    sessionStorage.setItem('oauth_aff_code', 'AFF123')
     apiClientPostMock.mockResolvedValue({
       data: {
         access_token: 'oauth-access-token',

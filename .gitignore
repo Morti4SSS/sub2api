@@ -119,6 +119,9 @@ tests
 CLAUDE.md
 .claude
 scripts
+!deploy/scripts/
+!deploy/scripts/account-backup-sync.ps1
+!deploy/scripts/account-backup-sync.example.env
 .code-review-state
 #openspec/
 code-reviews/

@@ -615,6 +615,8 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 	case "created_at":
 		field = dbaccount.FieldCreatedAt
 		defaultOrder = false
+	case "access_token_expires_at", "token_refresh":
+		return accountListAccessTokenExpiresAtOrder(sortOrder)
 	}
 
 	if sortOrder == pagination.SortOrderDesc {
@@ -624,6 +626,31 @@ func accountListOrder(params pagination.PaginationParams) []func(*entsql.Selecto
 		return []func(*entsql.Selector){dbent.Asc(dbaccount.FieldName), dbent.Asc(dbaccount.FieldID)}
 	}
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(dbaccount.FieldID)}
+}
+
+func accountListAccessTokenExpiresAtOrder(sortOrder string) []func(*entsql.Selector) {
+	direction := "ASC"
+	if sortOrder == pagination.SortOrderDesc {
+		direction = "DESC"
+	}
+	return []func(*entsql.Selector){
+		func(s *entsql.Selector) {
+			expr := strings.Join([]string{
+				"CASE",
+				"WHEN credentials->>'expires_at' ~ '^[0-9]+$' THEN (credentials->>'expires_at')::double precision",
+				"WHEN credentials->>'expires_at' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$' THEN EXTRACT(EPOCH FROM (credentials->>'expires_at')::timestamptz)",
+				"END",
+			}, " ")
+			s.OrderExpr(entsql.Expr(expr + " " + direction + " NULLS LAST"))
+		},
+		func(s *entsql.Selector) {
+			if sortOrder == pagination.SortOrderDesc {
+				s.OrderBy(entsql.Desc(s.C(dbaccount.FieldID)))
+				return
+			}
+			s.OrderBy(entsql.Asc(s.C(dbaccount.FieldID)))
+		},
+	}
 }
 
 func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {

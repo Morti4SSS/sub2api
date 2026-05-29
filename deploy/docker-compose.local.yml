@@ -105,6 +105,15 @@ services:
       - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
 
       # =======================================================================
+      # Account JSON Encrypted Backup
+      # =======================================================================
+      - ACCOUNT_JSON_BACKUP_ENABLED=${ACCOUNT_JSON_BACKUP_ENABLED:-false}
+      - ACCOUNT_JSON_BACKUP_PUBLIC_KEY_FILE=${ACCOUNT_JSON_BACKUP_PUBLIC_KEY_FILE:-/app/data/account_backup_public.pem}
+      - ACCOUNT_JSON_BACKUP_DIR=${ACCOUNT_JSON_BACKUP_DIR:-/app/data/account_backups}
+      - ACCOUNT_JSON_BACKUP_SERVER_RETAIN_COUNT=${ACCOUNT_JSON_BACKUP_SERVER_RETAIN_COUNT:-5}
+      - ACCOUNT_JSON_BACKUP_DEBOUNCE_SECONDS=${ACCOUNT_JSON_BACKUP_DEBOUNCE_SECONDS:-120}
+
+      # =======================================================================
       # Timezone Configuration
       # This affects ALL time operations in the application:
       # - Database timestamps

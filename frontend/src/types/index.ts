@@ -840,6 +840,7 @@ export interface Account {
   auto_pause_on_expired: boolean
   created_at: string
   updated_at: string
+  token_refresh_state?: TokenRefreshState | null
   proxy?: Proxy
   group_ids?: number[] // Groups this account belongs to
   groups?: Group[] // Preloaded group objects
@@ -909,6 +910,28 @@ export interface Account {
   current_window_cost?: number | null // 当前窗口费用
   active_sessions?: number | null // 当前活跃会话数
   current_rpm?: number | null // 当前分钟 RPM 计数
+}
+
+export interface TokenRefreshState {
+  access_token_expires_at?: string | null
+  refresh_window_starts_at?: string | null
+  check_interval_seconds: number
+  refresh_before_seconds: number
+  last_attempt_at?: string | null
+  last_success_at?: string | null
+  last_error_at?: string | null
+  last_source?: string
+  last_result?: string
+  last_error?: string
+  access_token_status?: string
+  refresh_token_status?: string
+  risk_level?: string
+  background_last_checked_at?: string | null
+  background_last_success_at?: string | null
+  background_last_error_at?: string | null
+  background_last_error?: string
+  background_refresh_token_saved?: boolean | null
+  background_refresh_token_status?: string
 }
 
 // Account Usage types

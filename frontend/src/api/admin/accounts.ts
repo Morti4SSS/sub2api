@@ -657,11 +657,13 @@ export async function batchClearError(accountIds: number[]): Promise<BatchOperat
 /**
  * Batch refresh account credentials
  * @param accountIds - Array of account IDs
+ * @param concurrency - Optional max concurrent refresh count
  * @returns Batch operation result
  */
-export async function batchRefresh(accountIds: number[]): Promise<BatchOperationResult> {
+export async function batchRefresh(accountIds: number[], concurrency?: number): Promise<BatchOperationResult> {
   const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-refresh', {
     account_ids: accountIds,
+    ...(concurrency !== undefined ? { concurrency } : {}),
   }, {
     timeout: 120000  // 120s timeout for large batch refreshes
   })

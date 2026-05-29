@@ -11,14 +11,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func resetViperWithJWTSecret(t *testing.T) {
+func resetViperWithTestConfig(t *testing.T, content string) string {
 	t.Helper()
 	viper.Reset()
-	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
+
+	dataDir := t.TempDir()
+	if strings.TrimSpace(content) == "" {
+		content = "{}\n"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.yaml"), []byte(content), 0644))
+	t.Setenv("DATA_DIR", dataDir)
+	return dataDir
+}
+
+func resetViperWithJWTSecret(t *testing.T) {
+	t.Helper()
+	secret := strings.Repeat("x", 32)
+	resetViperWithTestConfig(t, "jwt:\n  secret: \""+secret+"\"\n")
+	t.Setenv("JWT_SECRET", secret)
 }
 
 func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
-	viper.Reset()
+	resetViperWithTestConfig(t, "")
 	t.Setenv("JWT_SECRET", "")
 
 	cfg, err := LoadForBootstrap()
