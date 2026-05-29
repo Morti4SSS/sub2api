@@ -1,8 +1,8 @@
 services:
   sub2api:
-    image: sub2api-custom:0.1.132-vps
+    image: sub2api-custom:0.1.133-vps
     build:
       context: ..
       dockerfile: Dockerfile
       args:
-        VERSION: 0.1.132-vps
+        VERSION: 0.1.133-vps

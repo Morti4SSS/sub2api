@@ -457,6 +457,19 @@ const showDatePicker = ref(false)
 const resultData = ref<any>(null)
 const now = ref(new Date())
 let resetTimer: ReturnType<typeof setInterval> | null = null
+let ringAnimationFrame: number | null = null
+let ringAnimationTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearRingAnimation() {
+  if (ringAnimationFrame !== null) {
+    cancelAnimationFrame(ringAnimationFrame)
+    ringAnimationFrame = null
+  }
+  if (ringAnimationTimer !== null) {
+    clearTimeout(ringAnimationTimer)
+    ringAnimationTimer = null
+  }
+}
 
 // ==================== Date Range State ====================
 
@@ -552,12 +565,15 @@ function getRingOffset(ring: RingItem): number {
 }
 
 function triggerRingAnimation(items: RingItem[]) {
+  clearRingAnimation()
   ringAnimated.value = false
   displayPcts.value = items.map(() => 0)
 
   nextTick(() => {
-    requestAnimationFrame(() => {
-      setTimeout(() => {
+    ringAnimationFrame = requestAnimationFrame(() => {
+      ringAnimationFrame = null
+      ringAnimationTimer = setTimeout(() => {
+        ringAnimationTimer = null
         ringAnimated.value = true
 
         // Animate percentage numbers
@@ -570,9 +586,13 @@ function triggerRingAnimation(items: RingItem[]) {
           const p = Math.min(elapsed / duration, 1)
           const ease = 1 - Math.pow(1 - p, 3)
           displayPcts.value = targets.map(target => Math.round(ease * target))
-          if (p < 1) requestAnimationFrame(tick)
+          if (p < 1) {
+            ringAnimationFrame = requestAnimationFrame(tick)
+          } else {
+            ringAnimationFrame = null
+          }
         }
-        requestAnimationFrame(tick)
+        ringAnimationFrame = requestAnimationFrame(tick)
       }, 50)
     })
   })
@@ -934,6 +954,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resetTimer) clearInterval(resetTimer)
+  clearRingAnimation()
 })
 </script>
 
