@@ -1,0 +1,3 @@
+services:
+  sub2api:
+    image: ${SUB2API_IMAGE:-ghcr.io/morti4sss/sub2api:vps}
