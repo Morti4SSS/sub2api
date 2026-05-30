@@ -95,6 +95,13 @@ services:
       - JWT_EXPIRE_HOUR=${JWT_EXPIRE_HOUR:-24}
 
       # =======================================================================
+      # Token Refresh Configuration
+      # =======================================================================
+      # VPS default: refresh OAuth access tokens 12 hours before expiry.
+      # Override TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS in .env if needed.
+      - TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS=${TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS:-12}
+
+      # =======================================================================
       # TOTP (2FA) Configuration
       # =======================================================================
       # IMPORTANT: Set a fixed encryption key for TOTP secrets. If left empty,

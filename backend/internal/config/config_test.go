@@ -121,6 +121,16 @@ token_refresh:
 	require.Equal(t, 12.0, cfg.TokenRefresh.RefreshBeforeExpiryHours)
 }
 
+func TestDockerLocalDeployExposesTokenRefreshWindow(t *testing.T) {
+	compose, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "docker-compose.local.yml"))
+	require.NoError(t, err)
+	envExample, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", ".env.example"))
+	require.NoError(t, err)
+
+	require.Contains(t, string(compose), "TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS=${TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS:-12}")
+	require.Contains(t, string(envExample), "TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS=12")
+}
+
 func TestLoadFindsBackendConfigFromNestedServerDir(t *testing.T) {
 	projectRoot := t.TempDir()
 	backendDir := filepath.Join(projectRoot, "backend")

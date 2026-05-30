@@ -618,6 +618,9 @@ sora:
 # Token refresh behavior
 # token 刷新行为控制
 token_refresh:
+  # Refresh OAuth access tokens this many hours before expiry
+  # OAuth Access Token 过期前多少小时开始刷新
+  refresh_before_expiry_hours: 12
   # Whether OpenAI refresh flow is allowed to sync linked Sora accounts
   # 是否允许 OpenAI 刷新流程同步覆盖 linked_openai_account_id 关联的 Sora 账号 token
   sync_linked_sora_accounts: false
