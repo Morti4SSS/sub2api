@@ -54,6 +54,7 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
+	defaultOpenAITextTestPrompt  = "Respond with OK."
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -570,7 +571,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	c.Writer.Flush()
 
 	// Create OpenAI Responses API payload
-	payload := createOpenAITestPayload(testModelID, isOAuth)
+	payload := createOpenAITestPayload(testModelID, isOAuth, prompt)
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event
@@ -584,12 +585,19 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// Set common headers
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
+	req.Header.Set("OpenAI-Beta", "responses=experimental")
+	req.Header.Set("Originator", "codex_cli_rs")
+	req.Header.Set("User-Agent", codexCLIUserAgent)
+	req.Header.Set("Version", codexCLIVersion)
+	probeSessionID := openAIResponsesProbeSessionID(account.ID)
+	req.Header.Set("Session_ID", probeSessionID)
+	req.Header.Set("Conversation_ID", probeSessionID)
 
 	// Set OAuth-specific headers for ChatGPT internal API
 	if isOAuth {
 		req.Host = "chatgpt.com"
-		req.Header.Set("accept", "text/event-stream")
 		if chatgptAccountID != "" {
 			req.Header.Set("chatgpt-account-id", chatgptAccountID)
 		}
@@ -1224,7 +1232,13 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 }
 
 // createOpenAITestPayload creates a test payload for OpenAI Responses API
-func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
+func createOpenAITestPayload(modelID string, isOAuth bool, prompt ...string) map[string]any {
+	testPrompt := defaultOpenAITextTestPrompt
+	if len(prompt) > 0 {
+		if value := strings.TrimSpace(prompt[0]); value != "" {
+			testPrompt = value
+		}
+	}
 	payload := map[string]any{
 		"model": modelID,
 		"input": []map[string]any{
@@ -1233,7 +1247,7 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 				"content": []map[string]any{
 					{
 						"type": "input_text",
-						"text": "hi",
+						"text": testPrompt,
 					},
 				},
 			},
@@ -1255,7 +1269,7 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[string]any {
 	testPrompt := strings.TrimSpace(prompt)
 	if testPrompt == "" {
-		testPrompt = "hi"
+		testPrompt = defaultOpenAITextTestPrompt
 	}
 
 	return map[string]any{
