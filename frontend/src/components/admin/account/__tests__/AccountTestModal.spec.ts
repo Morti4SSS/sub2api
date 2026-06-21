@@ -178,7 +178,8 @@ describe('AccountTestModal', () => {
   })
 
   it('OpenAI 文本测试会显示上次提示词并提交本次输入', async () => {
-    ;(globalThis.localStorage.getItem as any).mockImplementation((key: string) => {
+    const getStoredItem = globalThis.localStorage.getItem as any
+    getStoredItem.mockImplementation((key: string) => {
       if (key === 'auth_token') return 'test-token'
       if (key === 'sub2api.accountTestPrompt.openai.text') return 'previous custom prompt'
       return null
