@@ -1,9 +1,11 @@
 package service
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -105,6 +107,62 @@ func TestOpenAIWSCyberPolicyMark_NonCyberPayload(t *testing.T) {
 
 	hit, _, _ := detectOpenAICyberPolicy(payload)
 	require.False(t, hit, "detectOpenAICyberPolicy should return false for non-cyber_policy error code")
+}
+
+func TestBuildOpenAIWSHeaders_PreservesClaudeCodeCodexPluginHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const (
+		claudeCodeUA         = "Claude Code/0.5.0 (Macos 15.5; arm64) iTerm2.app (Claude Code; 1.0.4)"
+		claudeCodeOriginator = "Claude Code"
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", claudeCodeUA)
+	c.Request.Header.Set("Originator", claudeCodeOriginator)
+	c.Request.Header.Set("Session_ID", "cc-session")
+	c.Request.Header.Set("Conversation_ID", "cc-conversation")
+
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+	}
+	account := &Account{
+		ID:          123,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+		Extra: map[string]any{
+			"codex_cli_only_allowed_clients": []any{"claude_code"},
+		},
+	}
+
+	headers, _ := svc.buildOpenAIWSHeaders(
+		c,
+		account,
+		"oauth-token",
+		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+		false,
+		"",
+		"",
+		"",
+	)
+
+	require.Equal(t, claudeCodeUA, headers.Get("User-Agent"))
+	require.Equal(t, claudeCodeOriginator, headers.Get("Originator"))
+	require.Equal(t, "chatgpt-acc", headers.Get("chatgpt-account-id"))
+	require.NotEqual(t, "cc-session", headers.Get("Session_ID"))
+	require.NotEqual(t, "cc-conversation", headers.Get("Conversation_ID"))
+	require.NotEmpty(t, headers.Get("Session_ID"))
+	require.NotEmpty(t, headers.Get("Conversation_ID"))
 }
 
 // TestIsOpenAIWSTokenEvent_DisjointWithTerminal 守护「token 事件集合与终止事件集合互斥」的不变量。

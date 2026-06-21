@@ -958,6 +958,19 @@ func isolateOpenAISessionID(apiKeyID int64, raw string) string {
 	return fmt.Sprintf("%016x", h.Sum64())
 }
 
+// isOpenAIAllowedCodexPluginRequest 判断入站请求是否命中账号显式放行的 Codex 插件签名。
+// 用于 OAuth passthrough 的 UA 兜底：命中时保留客户端真实 UA，同时仍由固定 registry 校验 originator 与 UA。
+func isOpenAIAllowedCodexPluginRequest(c *gin.Context, account *Account) bool {
+	if c == nil || account == nil {
+		return false
+	}
+	allowedClients := account.GetCodexCLIOnlyAllowedClients()
+	if len(allowedClients) == 0 {
+		return false
+	}
+	return openai.MatchAllowedClients(c.GetHeader("User-Agent"), c.GetHeader("originator"), allowedClients)
+}
+
 func logCodexCLIOnlyDetection(ctx context.Context, c *gin.Context, account *Account, apiKeyID int64, result CodexClientRestrictionDetectionResult, body []byte) {
 	if !result.Enabled {
 		return
@@ -3497,8 +3510,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
-	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
-	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) {
+	// OAuth 安全透传：对非 Codex/已放行插件 UA 统一兜底，降低被上游风控拦截概率。
+	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) &&
+		!isOpenAIAllowedCodexPluginRequest(c, account) {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 

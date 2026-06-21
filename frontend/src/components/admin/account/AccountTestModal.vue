@@ -55,12 +55,12 @@
         />
       </div>
 
-      <div v-if="supportsImageTest" class="space-y-1.5">
+      <div class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
-          :label="t('admin.accounts.imagePromptLabel')"
-          :placeholder="t('admin.accounts.imagePromptPlaceholder')"
-          :hint="t('admin.accounts.imageTestHint')"
+          :label="supportsImageTest ? t('admin.accounts.imagePromptLabel') : t('admin.accounts.testPrompt')"
+          :placeholder="supportsImageTest ? t('admin.accounts.imagePromptPlaceholder') : t('admin.accounts.testPrompt')"
+          :hint="supportsImageTest ? t('admin.accounts.imageTestHint') : ''"
           :disabled="status === 'connecting'"
           rows="3"
         />
@@ -278,6 +278,7 @@ let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
 const previewImageUrl = ref('')
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
+const testPromptStoragePrefix = 'sub2api.accountTestPrompt'
 const supportsGeminiImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
   if (!modelID.startsWith('gemini-') || !modelID.includes('-image')) return false
@@ -294,6 +295,12 @@ const supportsOpenAIImageTest = computed(() => {
 const supportsImageTest = computed(() => supportsGeminiImageTest.value || supportsOpenAIImageTest.value)
 
 const activeAccount = computed(() => displayAccount.value ?? props.account)
+const testPromptMode = computed(() => (supportsImageTest.value ? 'image' : 'text'))
+
+const testPromptStorageKey = computed(() => {
+  const platform = activeAccount.value?.platform || 'unknown'
+  return `${testPromptStoragePrefix}.${platform}.${testPromptMode.value}`
+})
 
 const sortTestModels = (models: ClaudeModel[]) => {
   const priorityMap = new Map(prioritizedGeminiModels.map((id, index) => [id, index]))
@@ -312,9 +319,9 @@ watch(
   async (newVal) => {
     if (newVal && props.account) {
       displayAccount.value = props.account
-      testPrompt.value = ''
       resetState()
       await loadAvailableModels()
+      loadStoredTestPrompt()
     } else {
       abortStream()
     }
@@ -328,11 +335,23 @@ watch(
   }
 )
 
-watch(selectedModelId, () => {
-  if (supportsImageTest.value && !testPrompt.value.trim()) {
-    testPrompt.value = t('admin.accounts.imagePromptDefault')
-  }
+watch(testPromptStorageKey, () => {
+  loadStoredTestPrompt()
 })
+
+const loadStoredTestPrompt = () => {
+  if (!activeAccount.value || !selectedModelId.value) return
+  const stored = localStorage.getItem(testPromptStorageKey.value)
+  if (stored !== null) {
+    testPrompt.value = stored
+    return
+  }
+  testPrompt.value = supportsImageTest.value ? t('admin.accounts.imagePromptDefault') : ''
+}
+
+const saveTestPrompt = () => {
+  localStorage.setItem(testPromptStorageKey.value, testPrompt.value.trim())
+}
 
 const loadAvailableModels = async () => {
   if (!activeAccount.value) return
@@ -424,6 +443,7 @@ const startTest = async () => {
 
   resetState()
   status.value = 'connecting'
+  saveTestPrompt()
   addLine(t('admin.accounts.startingTestForAccount', { name: activeAccount.value.name }), 'text-blue-400')
   addLine(t('admin.accounts.testAccountTypeLabel', { type: activeAccount.value.type }), 'text-gray-400')
   addLine('', 'text-gray-300')
@@ -445,7 +465,7 @@ const startTest = async () => {
       },
       body: JSON.stringify({
               model_id: selectedModelId.value,
-              prompt: supportsImageTest.value ? testPrompt.value.trim() : ''
+              prompt: testPrompt.value.trim()
             }),
       signal: abortController.signal
     })

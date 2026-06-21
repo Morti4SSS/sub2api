@@ -4292,7 +4292,7 @@ export default {
       testAccountTypeLabel: 'Account type: {type}',
       selectTestModel: 'Select Test Model',
       testModel: 'Test model',
-      testPrompt: 'Prompt: "hi"',
+      testPrompt: 'Test prompt',
       imagePromptLabel: 'Image prompt',
       imagePromptPlaceholder: 'Example: Generate an orange cat astronaut sticker in pixel-art style on a solid background.',
       imagePromptDefault: 'Generate a cute orange cat astronaut sticker on a clean pastel background.',

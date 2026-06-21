@@ -88,6 +88,35 @@ function mountModal() {
   })
 }
 
+function mountOpenAIModal() {
+  return mount(AccountTestModal, {
+    props: {
+      show: false,
+      account: {
+        id: 42,
+        name: 'OpenAI OAuth',
+        platform: 'openai',
+        type: 'oauth',
+        status: 'active',
+        credentials: {},
+        extra: {}
+      }
+    } as any,
+    global: {
+      stubs: {
+        BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
+        Select: { template: '<div class="select-stub"></div>' },
+        TextArea: {
+          props: ['modelValue'],
+          emits: ['update:modelValue'],
+          template: '<textarea class="textarea-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
+        },
+        Icon: true
+      }
+    }
+  })
+}
+
 describe('AccountTestModal', () => {
   beforeEach(() => {
     getById.mockReset()
@@ -146,6 +175,48 @@ describe('AccountTestModal', () => {
     const preview = wrapper.find('img[alt="test-image-1"]')
     expect(preview.exists()).toBe(true)
     expect(preview.attributes('src')).toBe('data:image/png;base64,QUJD')
+  })
+
+  it('OpenAI 文本测试会显示上次提示词并提交本次输入', async () => {
+    ;(globalThis.localStorage.getItem as any).mockImplementation((key: string) => {
+      if (key === 'auth_token') return 'test-token'
+      if (key === 'sub2api.accountTestPrompt.openai.text') return 'previous custom prompt'
+      return null
+    })
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.4', display_name: 'GPT-5.4' }])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_start","model":"gpt-5.4"}\n',
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+
+    const wrapper = mountOpenAIModal()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    const promptInput = wrapper.find('textarea.textarea-stub')
+    expect(promptInput.exists()).toBe(true)
+    expect((promptInput.element as HTMLTextAreaElement).value).toBe('previous custom prompt')
+    await promptInput.setValue('new reusable prompt')
+
+    const buttons = wrapper.findAll('button')
+    const startButton = buttons.find((button) => button.text().includes('admin.accounts.startTest'))
+    expect(startButton).toBeTruthy()
+
+    await startButton!.trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({
+      model_id: 'gpt-5.4',
+      prompt: 'new reusable prompt'
+    })
+    expect(globalThis.localStorage.setItem).toHaveBeenCalledWith(
+      'sub2api.accountTestPrompt.openai.text',
+      'new reusable prompt'
+    )
   })
 
   it('401 token_invalidated 时会回拉账号状态并抛出更新事件', async () => {
