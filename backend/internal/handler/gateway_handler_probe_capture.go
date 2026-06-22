@@ -21,7 +21,7 @@ type anthropicDesktopProbeContentBlock struct {
 }
 
 type anthropicDesktopProbeMessage struct {
-	Role    string                           `json:"role"`
+	Role    string                          `json:"role"`
 	Content anthropicDesktopProbeTextSource `json:"content"`
 }
 

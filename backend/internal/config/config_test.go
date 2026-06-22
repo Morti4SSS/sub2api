@@ -25,8 +25,8 @@ func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadForBootstrap() error: %v", err)
 	}
-	if cfg.JWT.Secret == "" {
-		t.Fatalf("LoadForBootstrap() should populate a temporary jwt.secret during bootstrap")
+	if cfg.JWT.Secret != "" {
+		t.Fatalf("LoadForBootstrap() should leave jwt.secret empty for DB bootstrap, got %q", cfg.JWT.Secret)
 	}
 }
 
