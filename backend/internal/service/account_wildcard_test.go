@@ -320,6 +320,71 @@ func TestAccountGetMappedModel(t *testing.T) {
 	}
 }
 
+func TestAccountClaudeCodeModelCatalogConfig(t *testing.T) {
+	account := &Account{
+		Extra: map[string]any{
+			"claude_code_model_catalog": []any{
+				map[string]any{
+					"role":          "sonnet",
+					"display_name":  "glm-5.1",
+					"request_model": "glm-5.1",
+					"supports_1m":   true,
+					"capabilities":  []any{"effort", "max_effort", "thinking"},
+				},
+			},
+		},
+	}
+
+	catalog := account.GetClaudeCodeModelCatalog()
+	if len(catalog) != 1 {
+		t.Fatalf("GetClaudeCodeModelCatalog() len = %d, want 1", len(catalog))
+	}
+	if catalog[0].Role != "sonnet" {
+		t.Fatalf("Role = %q, want sonnet", catalog[0].Role)
+	}
+	if catalog[0].DisplayName != "glm-5.1" {
+		t.Fatalf("DisplayName = %q, want glm-5.1", catalog[0].DisplayName)
+	}
+	if catalog[0].RequestModel != "glm-5.1" {
+		t.Fatalf("RequestModel = %q, want glm-5.1", catalog[0].RequestModel)
+	}
+	if !catalog[0].Supports1M {
+		t.Fatalf("Supports1M = false, want true")
+	}
+	wantCapabilities := []string{"effort", "max_effort", "thinking"}
+	if len(catalog[0].Capabilities) != len(wantCapabilities) {
+		t.Fatalf("Capabilities = %#v, want %#v", catalog[0].Capabilities, wantCapabilities)
+	}
+	for i, want := range wantCapabilities {
+		if catalog[0].Capabilities[i] != want {
+			t.Fatalf("Capabilities[%d] = %q, want %q", i, catalog[0].Capabilities[i], want)
+		}
+	}
+}
+
+func TestClaudeCodeCatalogRequestModelMapsToUpstreamModel(t *testing.T) {
+	account := &Account{
+		Extra: map[string]any{
+			"claude_code_model_catalog": []any{
+				map[string]any{
+					"role":           "sonnet",
+					"display_name":   "glm-5.1",
+					"request_model":  "glm-5.1",
+					"upstream_model": "provider-glm-5.1",
+				},
+			},
+		},
+	}
+
+	got, matched := account.ResolveClaudeCodeCatalogModel("glm-5.1")
+	if !matched {
+		t.Fatalf("ResolveClaudeCodeCatalogModel matched = false, want true")
+	}
+	if got != "provider-glm-5.1" {
+		t.Fatalf("ResolveClaudeCodeCatalogModel = %q, want provider-glm-5.1", got)
+	}
+}
+
 func TestAccountResolveMappedModel(t *testing.T) {
 	tests := []struct {
 		name           string

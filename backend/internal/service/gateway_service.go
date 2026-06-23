@@ -4094,6 +4094,9 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 		}
 		return true
 	}
+	if IsClaudeCodeClient(ctx) && account.IsClaudeCodeCatalogModel(requestedModel) {
+		return true
+	}
 	return s.isModelSupportedByAccount(account, requestedModel)
 }
 
@@ -4933,11 +4936,27 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
+		originalPassthroughModel := passthroughModel
 		if passthroughModel != "" {
-			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
+			mappedModel := passthroughModel
+			if IsClaudeCodeClient(ctx) {
+				if candidate, matched := account.ResolveClaudeCodeCatalogModel(passthroughModel); matched {
+					mappedModel = candidate
+				}
+			}
+			if mappedModel == passthroughModel {
+				mappedModel = account.GetMappedModel(passthroughModel)
+			}
+			if mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "Passthrough model mapping: %s -> %s (account: %s)", parsed.Model, mappedModel, account.Name)
 				passthroughModel = mappedModel
+			}
+		}
+		if IsClaudeCodeClient(ctx) {
+			if rewritten, changed := ApplyClaudeCodeEffortMapping(passthroughBody, account, originalPassthroughModel); changed {
+				passthroughBody = rewritten
+				logger.LegacyPrintf("service.gateway", "Passthrough Claude Code effort mapping applied: model=%s account=%s", originalPassthroughModel, account.Name)
 			}
 		}
 		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
@@ -5070,10 +5089,18 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
 	mappedModel := reqModel
 	mappingSource := ""
+	if IsClaudeCodeClient(ctx) {
+		if candidate, matched := account.ResolveClaudeCodeCatalogModel(reqModel); matched {
+			mappedModel = candidate
+			mappingSource = "claude_code_catalog"
+		}
+	}
 	if account.Type == AccountTypeAPIKey {
-		mappedModel = account.GetMappedModel(reqModel)
-		if mappedModel != reqModel {
-			mappingSource = "account"
+		if mappingSource == "" {
+			mappedModel = account.GetMappedModel(reqModel)
+			if mappedModel != reqModel {
+				mappingSource = "account"
+			}
 		}
 	}
 	if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
@@ -5103,6 +5130,14 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		reqModel = mappedModel
 		parsed.Model = mappedModel
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
+	}
+	if IsClaudeCodeClient(ctx) {
+		if rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, originalModel); changed {
+			if err := replaceBody(rewritten); err != nil {
+				return nil, err
+			}
+			logger.LegacyPrintf("service.gateway", "Claude Code effort mapping applied: model=%s account=%s", originalModel, account.Name)
+		}
 	}
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
@@ -9924,7 +9959,7 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 	if s.channelService == nil {
 		return false
 	}
-	upstreamModel := resolveAccountUpstreamModel(account, requestedModel)
+	upstreamModel := resolveAccountUpstreamModel(ctx, account, requestedModel)
 	if upstreamModel == "" {
 		return false
 	}
@@ -9932,9 +9967,14 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 }
 
 // resolveAccountUpstreamModel 确定账号将请求模型映射为什么上游模型。
-func resolveAccountUpstreamModel(account *Account, requestedModel string) string {
+func resolveAccountUpstreamModel(ctx context.Context, account *Account, requestedModel string) string {
 	if account.Platform == PlatformAntigravity {
 		return mapAntigravityModel(account, requestedModel)
+	}
+	if IsClaudeCodeClient(ctx) {
+		if mappedModel, matched := account.ResolveClaudeCodeCatalogModel(requestedModel); matched {
+			return mappedModel
+		}
 	}
 	return account.GetMappedModel(requestedModel)
 }
@@ -9978,10 +10018,26 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
-		if reqModel := parsed.Model; reqModel != "" {
-			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
+		reqModel := parsed.Model
+		if reqModel != "" {
+			mappedModel := reqModel
+			if IsClaudeCodeClient(ctx) {
+				if candidate, matched := account.ResolveClaudeCodeCatalogModel(reqModel); matched {
+					mappedModel = candidate
+				}
+			}
+			if mappedModel == reqModel {
+				mappedModel = account.GetMappedModel(reqModel)
+			}
+			if mappedModel != reqModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
+			}
+		}
+		if IsClaudeCodeClient(ctx) {
+			if rewritten, changed := ApplyClaudeCodeEffortMapping(passthroughBody, account, reqModel); changed {
+				passthroughBody = rewritten
+				logger.LegacyPrintf("service.gateway", "CountTokens passthrough Claude Code effort mapping applied: model=%s account=%s", reqModel, account.Name)
 			}
 		}
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
@@ -10046,10 +10102,19 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if reqModel != "" {
 		mappedModel := reqModel
 		mappingSource := ""
+		originalReqModel := reqModel
+		if IsClaudeCodeClient(ctx) {
+			if candidate, matched := account.ResolveClaudeCodeCatalogModel(reqModel); matched {
+				mappedModel = candidate
+				mappingSource = "claude_code_catalog"
+			}
+		}
 		if account.Type == AccountTypeAPIKey {
-			mappedModel = account.GetMappedModel(reqModel)
-			if mappedModel != reqModel {
-				mappingSource = "account"
+			if mappingSource == "" {
+				mappedModel = account.GetMappedModel(reqModel)
+				if mappedModel != reqModel {
+					mappingSource = "account"
+				}
 			}
 		}
 		if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
@@ -10060,13 +10125,20 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			}
 		}
 		if mappedModel != reqModel {
-			originalReqModel := reqModel
 			if err := replaceBody(s.replaceModelInBody(body, mappedModel)); err != nil {
 				return err
 			}
 			reqModel = mappedModel
 			parsed.Model = mappedModel
 			logger.LegacyPrintf("service.gateway", "CountTokens model mapping applied: %s -> %s (account: %s, source=%s)", originalReqModel, mappedModel, account.Name, mappingSource)
+		}
+		if IsClaudeCodeClient(ctx) {
+			if rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, originalReqModel); changed {
+				if err := replaceBody(rewritten); err != nil {
+					return err
+				}
+				logger.LegacyPrintf("service.gateway", "CountTokens Claude Code effort mapping applied: model=%s account=%s", originalReqModel, account.Name)
+			}
 		}
 	}
 
@@ -10648,6 +10720,38 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		modelsListCacheStoreTotal.Add(1)
 	}
 	return cloneStringSlice(models)
+}
+
+func (s *GatewayService) GetClaudeCodeModelCatalog(ctx context.Context, groupID *int64, platform string) []ClaudeCodeModelCatalogEntry {
+	var accounts []Account
+	var err error
+	if groupID != nil {
+		accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+	} else {
+		accounts, err = s.accountRepo.ListSchedulable(ctx)
+	}
+	if err != nil || len(accounts) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	out := make([]ClaudeCodeModelCatalogEntry, 0)
+	for _, acc := range accounts {
+		if platform != "" && acc.Platform != platform {
+			continue
+		}
+		for _, entry := range acc.GetClaudeCodeModelCatalog() {
+			if _, exists := seen[entry.RequestModel]; exists {
+				continue
+			}
+			seen[entry.RequestModel] = struct{}{}
+			out = append(out, entry)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].RequestModel < out[j].RequestModel
+	})
+	return out
 }
 
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {

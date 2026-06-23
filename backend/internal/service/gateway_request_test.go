@@ -1229,6 +1229,31 @@ func TestNormalizeClaudeOutputEffort(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeEffortMappingMapsXHighToMax(t *testing.T) {
+	body := []byte(`{
+		"model":"glm-5.1",
+		"output_config":{"effort":"xhigh"},
+		"messages":[{"role":"user","content":"hi"}],
+		"max_tokens":1024
+	}`)
+	account := &Account{
+		Extra: map[string]any{
+			"claude_code_effort_mapping": map[string]any{
+				"glm-5.1": map[string]any{
+					"target_field": "output_config.effort",
+					"values": map[string]any{
+						"xhigh": "max",
+					},
+				},
+			},
+		},
+	}
+
+	out, changed := ApplyClaudeCodeEffortMapping(body, account, "glm-5.1")
+	require.True(t, changed)
+	require.Equal(t, "max", gjson.GetBytes(out, "output_config.effort").String())
+}
+
 func BenchmarkParseGatewayRequest_New_Large(b *testing.B) {
 	data := buildLargeJSON()
 	b.SetBytes(int64(len(data)))

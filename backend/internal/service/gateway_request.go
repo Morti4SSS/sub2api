@@ -7,6 +7,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -1201,6 +1202,78 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 		return &value
 	default:
 		return nil
+	}
+}
+
+func ApplyClaudeCodeEffortMapping(body []byte, account *Account, requestModel string) ([]byte, bool) {
+	if account == nil || account.Extra == nil || strings.TrimSpace(requestModel) == "" {
+		return body, false
+	}
+	rawConfig, ok := account.Extra["claude_code_effort_mapping"].(map[string]any)
+	if !ok {
+		return body, false
+	}
+	modelConfig, ok := rawConfig[strings.TrimSpace(requestModel)].(map[string]any)
+	if !ok {
+		return body, false
+	}
+	targetField := claudeCodeEffortStringValue(modelConfig["target_field"])
+	if !allowedClaudeCodeEffortTargetField(targetField) {
+		return body, false
+	}
+	rawEffort := gjson.GetBytes(body, "output_config.effort").String()
+	effort := NormalizeClaudeOutputEffort(rawEffort)
+	if effort == nil {
+		return body, false
+	}
+	values, ok := modelConfig["values"].(map[string]any)
+	if !ok {
+		return body, false
+	}
+	mapped := claudeCodeEffortStringValue(values[*effort])
+	if mapped == "" {
+		return body, false
+	}
+	if targetField == "thinking.budget_tokens" {
+		if budget, err := strconv.Atoi(mapped); err == nil {
+			modified, err := sjson.SetBytes(body, targetField, budget)
+			return modified, err == nil
+		}
+		return body, false
+	}
+	modified, err := sjson.SetBytes(body, targetField, mapped)
+	if err != nil {
+		return body, false
+	}
+	return modified, true
+}
+
+func claudeCodeEffortStringValue(raw any) string {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case float64:
+		if math.Trunc(v) == v {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	default:
+		return ""
+	}
+}
+
+func allowedClaudeCodeEffortTargetField(field string) bool {
+	switch field {
+	case "output_config.effort", "thinking.budget_tokens", "reasoning_effort", "reasoning.effort":
+		return true
+	default:
+		return false
 	}
 }
 

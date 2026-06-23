@@ -463,7 +463,7 @@ const startTest = async () => {
       },
       body: JSON.stringify({
         model_id: selectedModelId.value,
-        prompt: supportsImageTest.value ? testPrompt.value.trim() : '',
+        prompt: testPrompt.value.trim(),
         mode: isOpenAIAccount.value ? testMode.value : 'default'
       }),
       signal: abortController.signal

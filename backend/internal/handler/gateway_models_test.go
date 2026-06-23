@@ -25,11 +25,15 @@ type gatewayModelsResponseForTest struct {
 }
 
 type gatewayModelItemForTest struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	Created   int64  `json:"created"`
-	OwnedBy   string `json:"owned_by"`
-	CreatedAt string `json:"created_at"`
+	ID           string         `json:"id"`
+	Object       string         `json:"object"`
+	Type         string         `json:"type"`
+	DisplayName  string         `json:"display_name"`
+	Created      int64          `json:"created"`
+	OwnedBy      string         `json:"owned_by"`
+	CreatedAt    string         `json:"created_at"`
+	Capabilities []string       `json:"capabilities"`
+	Metadata     map[string]any `json:"metadata"`
 }
 
 func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
@@ -390,6 +394,55 @@ func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDefaultF
 	require.NotZero(t, got.Data[0].Created)
 	require.Equal(t, "openai", got.Data[0].OwnedBy)
 	require.Empty(t, got.Data[0].CreatedAt)
+}
+
+func TestGatewayModelsUsesClaudeCodeCatalogDisplayNames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(28)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Extra: map[string]any{
+							"claude_code_model_catalog": []any{
+								map[string]any{
+									"role":          "sonnet",
+									"display_name":  "glm-5.1",
+									"request_model": "glm-5.1",
+									"supports_1m":   true,
+									"capabilities":  []any{"effort", "max_effort"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Data, 1)
+	require.Equal(t, "glm-5.1", got.Data[0].ID)
+	require.Equal(t, "glm-5.1", got.Data[0].DisplayName)
+	require.Contains(t, got.Data[0].Capabilities, "effort")
+	require.Contains(t, got.Data[0].Capabilities, "max_effort")
+	require.Equal(t, float64(1000000), got.Data[0].Metadata["context_window"])
 }
 
 func modelIDsForTest(models []gatewayModelItemForTest) []string {

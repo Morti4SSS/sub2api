@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // antigravityFailingWriter 模拟客户端断开连接的 gin.ResponseWriter
@@ -389,6 +390,22 @@ func TestAntigravityGatewayService_ForwardGemini_ModelRateLimitTriggersFailover(
 	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 	// 非粘性会话请求，ForceCacheBilling 应为 false
 	require.False(t, failoverErr.ForceCacheBilling, "ForceCacheBilling should be false for non-sticky session")
+}
+
+func TestAntigravityGatewayService_BuildTestRequestsUseCustomPrompt(t *testing.T) {
+	svc := &AntigravityGatewayService{}
+
+	geminiBody, err := svc.buildGeminiTestRequest("project-1", "gemini-3-pro", "custom antigravity prompt")
+	require.NoError(t, err)
+	require.Equal(t, "custom antigravity prompt", gjson.GetBytes(geminiBody, "request.contents.0.parts.0.text").String())
+
+	claudeBody, err := svc.buildClaudeTestRequest("project-1", "claude-sonnet-4-5", "custom claude prompt")
+	require.NoError(t, err)
+	require.Contains(t, string(claudeBody), "custom claude prompt")
+
+	defaultBody, err := svc.buildGeminiTestRequest("project-1", "gemini-3-pro", " ")
+	require.NoError(t, err)
+	require.Equal(t, ".", gjson.GetBytes(defaultBody, "request.contents.0.parts.0.text").String())
 }
 
 // TestAntigravityGatewayService_Forward_StickySessionForceCacheBilling

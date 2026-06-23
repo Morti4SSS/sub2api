@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -146,6 +147,24 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Equal(t, 42.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, 88.0, repo.updatedExtra["codex_7d_used_percent"])
 	require.Contains(t, recorder.Body.String(), "test_complete")
+}
+
+func TestCreateClaudeTestPayloadUsesCustomPrompt(t *testing.T) {
+	payload, err := createTestPayload("claude-sonnet-4-5-20250929", "explain uptime checks")
+	require.NoError(t, err)
+
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Equal(t, "explain uptime checks", gjson.GetBytes(payloadBytes, "messages.0.content.0.text").String())
+}
+
+func TestCreateClaudeTestPayloadDefaultsBlankPrompt(t *testing.T) {
+	payload, err := createTestPayload("claude-sonnet-4-5-20250929", "   ")
+	require.NoError(t, err)
+
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Equal(t, defaultClaudeTextTestPrompt, gjson.GetBytes(payloadBytes, "messages.0.content.0.text").String())
 }
 
 func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {

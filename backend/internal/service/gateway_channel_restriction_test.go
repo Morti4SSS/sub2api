@@ -43,7 +43,7 @@ func TestResolveAccountUpstreamModel_Antigravity(t *testing.T) {
 		Platform: PlatformAntigravity,
 	}
 	// Antigravity 平台使用 DefaultAntigravityModelMapping
-	got := resolveAccountUpstreamModel(account, "claude-sonnet-4-6")
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
 	require.Equal(t, "claude-sonnet-4-6", got)
 }
 
@@ -52,7 +52,7 @@ func TestResolveAccountUpstreamModel_Antigravity_Unsupported(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAntigravity,
 	}
-	got := resolveAccountUpstreamModel(account, "totally-unknown-model")
+	got := resolveAccountUpstreamModel(context.Background(), account, "totally-unknown-model")
 	require.Equal(t, "", got, "unsupported model should return empty")
 }
 
@@ -61,8 +61,48 @@ func TestResolveAccountUpstreamModel_NonAntigravity(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAnthropic,
 	}
-	got := resolveAccountUpstreamModel(account, "claude-sonnet-4-6")
+	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
 	require.Equal(t, "claude-sonnet-4-6", got, "no mapping = passthrough")
+}
+
+func TestResolveAccountUpstreamModel_NonClaudeCodeIgnoresCatalog(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Extra: map[string]any{
+			"claude_code_model_catalog": []any{
+				map[string]any{
+					"role":           "sonnet",
+					"display_name":   "glm-5.1",
+					"request_model":  "glm-5.1",
+					"upstream_model": "provider-glm-5.1",
+				},
+			},
+		},
+	}
+
+	got := resolveAccountUpstreamModel(context.Background(), account, "glm-5.1")
+	require.Equal(t, "glm-5.1", got)
+}
+
+func TestResolveAccountUpstreamModel_ClaudeCodeUsesCatalog(t *testing.T) {
+	t.Parallel()
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Extra: map[string]any{
+			"claude_code_model_catalog": []any{
+				map[string]any{
+					"role":           "sonnet",
+					"display_name":   "glm-5.1",
+					"request_model":  "glm-5.1",
+					"upstream_model": "provider-glm-5.1",
+				},
+			},
+		},
+	}
+
+	got := resolveAccountUpstreamModel(SetClaudeCodeClient(context.Background(), true), account, "glm-5.1")
+	require.Equal(t, "provider-glm-5.1", got)
 }
 
 // --- checkChannelPricingRestriction ---

@@ -2607,6 +2607,12 @@
         </div>
       </div>
 
+      <ClaudeCodeConfigEditor
+        v-if="form.platform === 'anthropic'"
+        v-model:catalog="claudeCodeCatalog"
+        v-model:effort-mappings="claudeCodeEffortMappings"
+      />
+
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
@@ -3238,7 +3244,15 @@ import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
+import ClaudeCodeConfigEditor from '@/components/account/ClaudeCodeConfigEditor.vue'
 import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
+import {
+  createEmptyClaudeCodeCatalogEntry,
+  createEmptyClaudeCodeEffortEntry,
+  writeClaudeCodeConfigToExtra,
+  type ClaudeCodeCatalogForm,
+  type ClaudeCodeEffortForm
+} from '@/components/account/claudeCodeConfig'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
@@ -3423,6 +3437,8 @@ const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAllowClaudeCodeEnabled = ref(false)
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
+const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
+const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
 const webSearchGlobalEnabled = ref(false)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
@@ -4250,6 +4266,8 @@ const resetForm = () => {
   codexCLIOnlyAllowClaudeCodeEnabled.value = false
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
+  claudeCodeCatalog.value = [createEmptyClaudeCodeCatalogEntry()]
+  claudeCodeEffortMappings.value = [createEmptyClaudeCodeEffortEntry()]
   // Reset quota control state
   windowCostEnabled.value = false
   windowCostLimit.value = null
@@ -4355,21 +4373,24 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
 }
 
 const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unknown> | undefined => {
-  if (form.platform !== 'anthropic' || accountCategory.value !== 'apikey') {
+  if (form.platform !== 'anthropic') {
     return base
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
-  if (anthropicPassthroughEnabled.value) {
-    extra.anthropic_passthrough = true
-  } else {
-    delete extra.anthropic_passthrough
+  if (accountCategory.value === 'apikey') {
+    if (anthropicPassthroughEnabled.value) {
+      extra.anthropic_passthrough = true
+    } else {
+      delete extra.anthropic_passthrough
+    }
+    if (webSearchEmulationMode.value === 'default') {
+      delete extra.web_search_emulation
+    } else {
+      extra.web_search_emulation = webSearchEmulationMode.value
+    }
   }
-  if (webSearchEmulationMode.value === 'default') {
-    delete extra.web_search_emulation
-  } else {
-    extra.web_search_emulation = webSearchEmulationMode.value
-  }
+  writeClaudeCodeConfigToExtra(extra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
 
   return Object.keys(extra).length > 0 ? extra : undefined
 }
@@ -4727,9 +4748,9 @@ const createAccountAndFinish = async (
     return
   }
   // Inject quota limits for apikey/bedrock accounts
-  let finalExtra = extra
+  let finalExtra = platform === 'anthropic' ? buildAnthropicExtra(extra) : extra
   if (type === 'apikey' || type === 'bedrock') {
-    const quotaExtra: Record<string, unknown> = { ...(extra || {}) }
+    const quotaExtra: Record<string, unknown> = { ...(finalExtra || {}) }
     if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
       quotaExtra.quota_limit = editQuotaLimit.value
     }
@@ -5485,7 +5506,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           platform: form.platform,
           type: addMethod.value, // Use addMethod as type: 'oauth' or 'setup-token'
           credentials,
-          extra,
+          extra: buildAnthropicExtra(extra),
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,

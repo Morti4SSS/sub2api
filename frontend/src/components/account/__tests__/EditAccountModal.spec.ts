@@ -167,6 +167,29 @@ function buildVertexAccount() {
   } as any
 }
 
+function buildAnthropicAccount() {
+  return {
+    id: 3,
+    name: 'Anthropic Key',
+    notes: '',
+    platform: 'anthropic',
+    type: 'apikey',
+    credentials: {
+      api_key: 'sk-ant-test',
+      base_url: 'https://api.anthropic.com'
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
 function mountModal(account = buildAccount()) {
   return mount(EditAccountModal, {
     props: {
@@ -328,6 +351,47 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_capabilities).toEqual([
       'chat_completions'
     ])
+  })
+
+  it('submits Claude Code CLI catalog and effort mapping in Anthropic extra', async () => {
+    const account = buildAnthropicAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="claude-code-catalog-role-0"]').setValue('sonnet')
+    await wrapper.get('[data-testid="claude-code-catalog-display-name-0"]').setValue('glm-5.1')
+    await wrapper.get('[data-testid="claude-code-catalog-request-model-0"]').setValue('glm-5.1')
+    await wrapper.get('[data-testid="claude-code-catalog-upstream-model-0"]').setValue('provider-glm-5.1')
+    await wrapper.get('[data-testid="claude-code-catalog-supports-1m-0"]').setValue(true)
+    await wrapper.get('[data-testid="claude-code-catalog-capabilities-0"]').setValue('effort, max_effort, thinking')
+    await wrapper.get('[data-testid="claude-code-effort-target-field-0"]').setValue('output_config.effort')
+    await wrapper.get('[data-testid="claude-code-effort-xhigh-0"]').setValue('max')
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.claude_code_model_catalog).toEqual([
+      {
+        role: 'sonnet',
+        display_name: 'glm-5.1',
+        request_model: 'glm-5.1',
+        upstream_model: 'provider-glm-5.1',
+        supports_1m: true,
+        capabilities: ['effort', 'max_effort', 'thinking']
+      }
+    ])
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.claude_code_effort_mapping).toEqual({
+      'glm-5.1': {
+        target_field: 'output_config.effort',
+        values: {
+          xhigh: 'max'
+        }
+      }
+    })
   })
 
 	it('submits OpenAI quota auto-pause thresholds in extra', async () => {

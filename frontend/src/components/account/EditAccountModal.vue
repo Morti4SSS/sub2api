@@ -1542,6 +1542,12 @@
         </div>
       </div>
 
+      <ClaudeCodeConfigEditor
+        v-if="account?.platform === 'anthropic'"
+        v-model:catalog="claudeCodeCatalog"
+        v-model:effort-mappings="claudeCodeEffortMappings"
+      />
+
       <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'apikey' || account?.type === 'bedrock')"
@@ -2398,7 +2404,17 @@ import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
+import ClaudeCodeConfigEditor from '@/components/account/ClaudeCodeConfigEditor.vue'
 import { applyInterceptWarmup } from '@/components/account/credentialsBuilder'
+import {
+  createEmptyClaudeCodeCatalogEntry,
+  createEmptyClaudeCodeEffortEntry,
+  readClaudeCodeCatalog,
+  readClaudeCodeEffortMappings,
+  writeClaudeCodeConfigToExtra,
+  type ClaudeCodeCatalogForm,
+  type ClaudeCodeEffortForm
+} from '@/components/account/claudeCodeConfig'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
@@ -2589,6 +2605,8 @@ type CodexImageGenerationBridgeMode = 'inherit' | 'enabled' | 'disabled'
 const codexImageGenerationBridgeMode = ref<CodexImageGenerationBridgeMode>('inherit')
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
+const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
+const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
 const webSearchGlobalEnabled = ref(false)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
@@ -2965,6 +2983,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexImageGenerationBridgeMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
+  claudeCodeCatalog.value = readClaudeCodeCatalog(extra)
+  claudeCodeEffortMappings.value = readClaudeCodeEffortMappings(extra)
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
@@ -4203,6 +4223,14 @@ const handleSubmit = async () => {
       }
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
+      updatePayload.extra = newExtra
+    }
+
+    if (props.account.platform === 'anthropic') {
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
+        (props.account.extra as Record<string, unknown>) || {}
+      const newExtra: Record<string, unknown> = { ...currentExtra }
+      writeClaudeCodeConfigToExtra(newExtra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
       updatePayload.extra = newExtra
     }
 
