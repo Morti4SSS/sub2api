@@ -316,5 +316,6 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 		h.responsesErrorResponse(c, http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage())
 		return
 	}
-	h.responsesErrorResponse(c, statusCode, "server_error", "All available accounts exhausted")
+	message := service.BuildFailoverExhaustedClientMessage("All available accounts exhausted", lastErr)
+	h.responsesErrorResponse(c, statusCode, "server_error", message)
 }

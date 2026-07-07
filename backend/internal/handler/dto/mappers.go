@@ -3,9 +3,11 @@ package dto
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
 func UserFromServiceShallow(u *service.User) *User {
@@ -214,6 +216,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Type:                    a.Type,
 		Credentials:             redactedCreds,
 		CredentialsStatus:       credsStatus,
+		TokenStatus:             buildTokenStatus(a),
 		Extra:                   a.Extra,
 		ProxyID:                 a.ProxyID,
 		ProxyFallbackOriginID:   a.ProxyFallbackOriginID,
@@ -392,6 +395,72 @@ func AccountFromService(a *service.Account) *Account {
 		}
 	}
 	return out
+}
+
+func buildTokenStatus(a *service.Account) *TokenStatus {
+	if a == nil || a.Credentials == nil {
+		return nil
+	}
+	if a.Platform != service.PlatformOpenAI && a.Platform != service.PlatformAnthropic {
+		return nil
+	}
+	if a.Type != service.AccountTypeOAuth && a.Type != service.AccountTypeSetupToken {
+		return nil
+	}
+	status := &TokenStatus{
+		AccessToken:  tokenPresence(a.Credentials["access_token"]),
+		RefreshToken: tokenPresence(a.Credentials["refresh_token"]),
+	}
+	status.RefreshState = tokenRefreshState(a, status.RefreshToken)
+	if msg := tokenRefreshMessage(a); msg != "" {
+		status.Message = msg
+	}
+	return status
+}
+
+func tokenPresence(raw any) string {
+	if isCredentialValuePresent(raw) {
+		return "present"
+	}
+	return "missing"
+}
+
+func tokenRefreshState(a *service.Account, refreshPresence string) string {
+	if tokenRefreshFailed(a) {
+		return "failed"
+	}
+	if refreshPresence == "present" {
+		return "auto"
+	}
+	return "manual"
+}
+
+func tokenRefreshFailed(a *service.Account) bool {
+	text := strings.ToLower(strings.TrimSpace(a.ErrorMessage + " " + a.TempUnschedulableReason))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "token refresh") ||
+		strings.Contains(text, "token_refresh") ||
+		strings.Contains(text, "refresh_token") ||
+		strings.Contains(text, "invalid_grant") ||
+		strings.Contains(text, "invalid_refresh_token")
+}
+
+func tokenRefreshMessage(a *service.Account) string {
+	message := strings.TrimSpace(a.ErrorMessage)
+	if message == "" {
+		message = strings.TrimSpace(a.TempUnschedulableReason)
+	}
+	if message == "" {
+		return ""
+	}
+	message = logredact.RedactText(message)
+	const limit = 180
+	if len(message) > limit {
+		return message[:limit] + "..."
+	}
+	return message
 }
 
 func timeToUnixSeconds(value *time.Time) *int64 {

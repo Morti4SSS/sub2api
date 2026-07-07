@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -52,6 +53,40 @@ func newJSONResponse(status int, body string) *http.Response {
 }
 
 // --- test functions ---
+
+func TestCreateClaudeTestPayloadUsesCustomPrompt(t *testing.T) {
+	payload, err := createTestPayloadWithPrompt("claude-sonnet-4-5", "say compact ok")
+	require.NoError(t, err)
+
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "say compact ok")
+	require.NotContains(t, string(raw), "hi")
+}
+
+func TestCreateClaudeTestPayloadDefaultsBlankPrompt(t *testing.T) {
+	payload, err := createTestPayloadWithPrompt("claude-sonnet-4-5", "   ")
+	require.NoError(t, err)
+
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), defaultClaudeTestPrompt)
+}
+
+func TestCreateOpenAITestPayloadUsesCustomPrompt(t *testing.T) {
+	payload := createOpenAITestPayloadWithPrompt("gpt-5.4", false, "say compact ok")
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "say compact ok")
+	require.NotContains(t, string(raw), "hi")
+}
+
+func TestCreateOpenAITestPayloadDefaultsBlankPrompt(t *testing.T) {
+	payload := createOpenAITestPayloadWithPrompt("gpt-5.4", false, "   ")
+	raw, err := json.Marshal(payload)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), defaultOpenAITextTestPrompt)
+}
 
 func newTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 	gin.SetMode(gin.TestMode)

@@ -835,6 +835,13 @@ export interface TempUnschedulableStatus {
   state?: TempUnschedulableState
 }
 
+export interface AccountTokenStatus {
+  access_token: 'present' | 'missing'
+  refresh_token: 'present' | 'missing'
+  refresh_state: 'auto' | 'manual' | 'failed' | 'unknown'
+  message?: string
+}
+
 export interface Account {
   id: number
   name: string
@@ -847,6 +854,7 @@ export interface Account {
   // 改为通过 credentials_status.has_<key> 暴露存在性。
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
+  token_status?: AccountTokenStatus
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>

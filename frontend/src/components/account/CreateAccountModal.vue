@@ -2795,6 +2795,12 @@
         </div>
       </div>
 
+      <ClaudeCodeConfigEditor
+        v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
+        v-model:catalog="claudeCodeCatalog"
+        v-model:effort-mappings="claudeCodeEffortMappings"
+      />
+
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
@@ -3452,6 +3458,14 @@ import {
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
+import ClaudeCodeConfigEditor from './ClaudeCodeConfigEditor.vue'
+import {
+  createEmptyClaudeCodeCatalogEntry,
+  createEmptyClaudeCodeEffortEntry,
+  writeClaudeCodeConfigToExtra,
+  type ClaudeCodeCatalogForm,
+  type ClaudeCodeEffortForm
+} from './claudeCodeConfig'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -3660,6 +3674,8 @@ const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
+const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
+const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -4512,6 +4528,8 @@ const resetForm = () => {
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
+  claudeCodeCatalog.value = [createEmptyClaudeCodeCatalogEntry()]
+  claudeCodeEffortMappings.value = [createEmptyClaudeCodeEffortEntry()]
   // Reset quota control state
   windowCostEnabled.value = false
   windowCostLimit.value = null
@@ -4640,6 +4658,7 @@ const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unk
   } else {
     extra.web_search_emulation = webSearchEmulationMode.value
   }
+  writeClaudeCodeConfigToExtra(extra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
 
   return Object.keys(extra).length > 0 ? extra : undefined
 }

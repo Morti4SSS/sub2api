@@ -183,6 +183,41 @@ describe('AccountTestModal', () => {
     })
   })
 
+  it('文本模型测试会携带自定义提示词', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'claude-sonnet-4-5', display_name: 'Claude Sonnet 4.5' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      id: 14,
+      name: 'Claude Relay',
+      platform: 'anthropic',
+      type: 'apikey',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    ;(wrapper.vm as any).selectedModelId = 'claude-sonnet-4-5'
+    const promptInput = wrapper.find('textarea.textarea-stub')
+    expect(promptInput.exists()).toBe(true)
+    await promptInput.setValue('  explain status  ')
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toMatchObject({
+      model_id: 'claude-sonnet-4-5',
+      prompt: 'explain status'
+    })
+  })
+
   it('OpenAI Compact 探测会携带 compact 测试模式', async () => {
     getAvailableModels.mockResolvedValue([
       { id: 'gpt-5.4', display_name: 'GPT-5.4' }

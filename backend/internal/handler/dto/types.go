@@ -169,6 +169,7 @@ type Account struct {
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
 	Credentials             map[string]any  `json:"credentials"`
 	CredentialsStatus       map[string]bool `json:"credentials_status,omitempty"`
+	TokenStatus             *TokenStatus    `json:"token_status,omitempty"`
 	Extra                   map[string]any  `json:"extra"`
 	ProxyID                 *int64          `json:"proxy_id"`
 	ProxyFallbackOriginID   *int64          `json:"proxy_fallback_origin_id"`
@@ -276,6 +277,13 @@ type Account struct {
 
 	GroupIDs []int64  `json:"group_ids,omitempty"`
 	Groups   []*Group `json:"groups,omitempty"`
+}
+
+type TokenStatus struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	RefreshState string `json:"refresh_state"`
+	Message      string `json:"message,omitempty"`
 }
 
 type AccountGroup struct {

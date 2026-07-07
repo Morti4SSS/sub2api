@@ -58,6 +58,68 @@ func TestAccountFromServiceShallow_RedactsSensitiveCredentials(t *testing.T) {
 	require.Equal(t, "rt-secret", src.Credentials["refresh_token"])
 }
 
+func TestAccountFromServiceShallow_BuildsTokenStatusWithoutSecrets(t *testing.T) {
+	src := &service.Account{
+		ID:       43,
+		Name:     "token-demo",
+		Platform: "openai",
+		Type:     "oauth",
+		Status:   "error",
+		Credentials: map[string]any{
+			"access_token":  "at-secret",
+			"refresh_token": "rt-secret",
+		},
+		ErrorMessage: "Token refresh failed (non-retryable): invalid_refresh_token",
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.NotNil(t, got)
+	require.NotNil(t, got.TokenStatus)
+	require.Equal(t, "present", got.TokenStatus.AccessToken)
+	require.Equal(t, "present", got.TokenStatus.RefreshToken)
+	require.Equal(t, "failed", got.TokenStatus.RefreshState)
+	require.Contains(t, got.TokenStatus.Message, "invalid_refresh_token")
+
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "at-secret")
+	require.NotContains(t, string(raw), "rt-secret")
+}
+
+func TestAccountFromServiceShallow_BuildsManualTokenStatusWhenRefreshMissing(t *testing.T) {
+	src := &service.Account{
+		ID:       44,
+		Name:     "manual-demo",
+		Platform: "openai",
+		Type:     "oauth",
+		Credentials: map[string]any{
+			"access_token": "at-secret",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.NotNil(t, got.TokenStatus)
+	require.Equal(t, "present", got.TokenStatus.AccessToken)
+	require.Equal(t, "missing", got.TokenStatus.RefreshToken)
+	require.Equal(t, "manual", got.TokenStatus.RefreshState)
+}
+
+func TestAccountFromServiceShallow_SkipsTokenStatusForOtherPlatforms(t *testing.T) {
+	src := &service.Account{
+		ID:       45,
+		Name:     "gemini-demo",
+		Platform: "gemini",
+		Type:     "oauth",
+		Credentials: map[string]any{
+			"access_token":  "at-secret",
+			"refresh_token": "rt-secret",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.Nil(t, got.TokenStatus)
+}
+
 func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {
 	src := &service.Account{ID: 1, Name: "n", Platform: "anthropic", Type: "oauth"}
 	got := AccountFromServiceShallow(src)

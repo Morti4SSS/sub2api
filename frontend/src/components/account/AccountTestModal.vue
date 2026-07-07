@@ -66,12 +66,12 @@
         />
       </div>
 
-      <div v-if="supportsImageTest" class="space-y-1.5">
+      <div class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
-          :label="t('admin.accounts.imagePromptLabel')"
-          :placeholder="t('admin.accounts.imagePromptPlaceholder')"
-          :hint="t('admin.accounts.imageTestHint')"
+          :label="supportsImageTest ? t('admin.accounts.imagePromptLabel') : t('admin.accounts.testPromptLabel')"
+          :placeholder="supportsImageTest ? t('admin.accounts.imagePromptPlaceholder') : t('admin.accounts.testPromptPlaceholder')"
+          :hint="supportsImageTest ? t('admin.accounts.imageTestHint') : t('admin.accounts.testPromptHint')"
           :disabled="status === 'connecting'"
           rows="3"
         />
@@ -288,6 +288,7 @@ let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
 const testMode = ref<'default' | 'compact'>('default')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
+const supportsTextPrompt = computed(() => props.account?.platform === 'openai' || props.account?.platform === 'anthropic')
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
@@ -420,6 +421,7 @@ const startTest = async () => {
   try {
     // Use the configured API base; EventSource does not support POST.
     const url = buildApiUrl(`/admin/accounts/${props.account.id}/test`)
+    const requestPrompt = (supportsImageTest.value || supportsTextPrompt.value) ? testPrompt.value.trim() : ''
 
     // Use fetch with streaming for SSE since EventSource doesn't support POST
     const response = await fetch(url, {
@@ -430,7 +432,7 @@ const startTest = async () => {
       },
       body: JSON.stringify({
         model_id: selectedModelId.value,
-        prompt: supportsImageTest.value ? testPrompt.value.trim() : '',
+        prompt: requestPrompt,
         mode: isOpenAIAccount.value ? testMode.value : 'default'
       }),
       signal: abortController.signal

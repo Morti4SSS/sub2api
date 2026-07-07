@@ -66,12 +66,12 @@
         />
       </div>
 
-      <div v-if="supportsImageTest" class="space-y-1.5">
+      <div class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
-          :label="t('admin.accounts.imagePromptLabel')"
-          :placeholder="t('admin.accounts.imagePromptPlaceholder')"
-          :hint="t('admin.accounts.imageTestHint')"
+          :label="supportsImageTest ? t('admin.accounts.imagePromptLabel') : t('admin.accounts.testPromptLabel')"
+          :placeholder="supportsImageTest ? t('admin.accounts.imagePromptPlaceholder') : t('admin.accounts.testPromptPlaceholder')"
+          :hint="supportsImageTest ? t('admin.accounts.imageTestHint') : t('admin.accounts.testPromptHint')"
           :disabled="status === 'connecting'"
           rows="3"
         />
@@ -289,6 +289,7 @@ const generatedImages = ref<PreviewImage[]>([])
 const previewImageUrl = ref('')
 const testMode = ref<'default' | 'compact'>('default')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
+const supportsTextPrompt = computed(() => props.account?.platform === 'openai' || props.account?.platform === 'anthropic')
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
@@ -418,13 +419,14 @@ const startTest = async () => {
   abortController = new AbortController()
 
   try {
+    const requestPrompt = (supportsImageTest.value || supportsTextPrompt.value) ? testPrompt.value.trim() : ''
     const requestBody: {
       model_id: string
       prompt: string
       mode?: 'default' | 'compact'
     } = {
       model_id: selectedModelId.value,
-      prompt: supportsImageTest.value ? testPrompt.value.trim() : ''
+      prompt: requestPrompt
     }
     if (isOpenAIAccount.value) {
       requestBody.mode = testMode.value

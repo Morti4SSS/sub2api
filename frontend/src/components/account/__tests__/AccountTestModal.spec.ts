@@ -148,6 +148,44 @@ describe('AccountTestModal', () => {
     })
   })
 
+  it('sends custom prompt for text account tests', async () => {
+    const wrapper = mount(AccountTestModal, {
+      props: {
+        show: true,
+        account: {
+          id: 9,
+          name: 'Claude Relay',
+          platform: 'anthropic',
+          type: 'apikey',
+          status: 'active'
+        } as any
+      },
+      global: {
+        stubs: {
+          BaseDialog: BaseDialogStub,
+          Select: SelectStub,
+          TextArea: TextAreaStub,
+          Icon: true
+        }
+      }
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'claude-sonnet-4-5'
+    const textarea = wrapper.find('textarea')
+    expect(textarea.exists()).toBe(true)
+    await textarea.setValue('  explain status  ')
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    const [, options] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(options.body)).toMatchObject({
+      model_id: 'claude-sonnet-4-5',
+      prompt: 'explain status'
+    })
+  })
+
   it('renders Chat Completions path status from test SSE', async () => {
     const encoder = new TextEncoder()
     const chunks = [

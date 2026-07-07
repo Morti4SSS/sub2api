@@ -269,6 +269,9 @@
               <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
             </button>
           </template>
+          <template #cell-token_status="{ row }">
+            <AccountTokenStatusCell :account="row" />
+          </template>
           <template #cell-today_stats="{ row }">
             <AccountTodayStatsCell
               :stats="todayStatsByAccountId[String(row.id)] ?? null"
@@ -453,6 +456,7 @@ import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
+import AccountTokenStatusCell from '@/components/account/AccountTokenStatusCell.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
@@ -1210,6 +1214,7 @@ const allColumns = computed(() => {
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
+    { key: 'token_status', label: t('admin.accounts.columns.tokenStatus'), sortable: false },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {

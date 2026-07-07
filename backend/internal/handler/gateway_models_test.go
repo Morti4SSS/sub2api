@@ -25,11 +25,15 @@ type gatewayModelsResponseForTest struct {
 }
 
 type gatewayModelItemForTest struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	Created   int64  `json:"created"`
-	OwnedBy   string `json:"owned_by"`
-	CreatedAt string `json:"created_at"`
+	ID           string         `json:"id"`
+	Object       string         `json:"object"`
+	Type         string         `json:"type"`
+	Created      int64          `json:"created"`
+	OwnedBy      string         `json:"owned_by"`
+	DisplayName  string         `json:"display_name"`
+	CreatedAt    string         `json:"created_at"`
+	Capabilities []string       `json:"capabilities"`
+	Metadata     map[string]any `json:"metadata"`
 }
 
 func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
@@ -129,6 +133,102 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, []string{"gemini-2.5-flash"}, modelIDsForTest(got.Data))
+}
+
+func TestGatewayModels_AnthropicGroupUsesClaudeCodeCatalog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(31)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Type:     service.AccountTypeAPIKey,
+						Extra: map[string]any{
+							"claude_code_model_catalog": []any{
+								map[string]any{
+									"role":          "sonnet",
+									"display_name":  "Relay Sonnet",
+									"request_model": "relay-sonnet",
+									"supports_1m":   true,
+									"capabilities":  []any{"thinking", "effort"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "list", got.Object)
+	require.Len(t, got.Data, 1)
+	require.Equal(t, "relay-sonnet", got.Data[0].ID)
+	require.Equal(t, "Relay Sonnet", got.Data[0].DisplayName)
+	require.Equal(t, []string{"thinking", "effort"}, got.Data[0].Capabilities)
+	require.Equal(t, float64(1000000), got.Data[0].Metadata["context_window"])
+}
+
+func TestGatewayModels_AnthropicGroupKeepsDefaultModelsForNonClaudeCodeClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(32)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Type:     service.AccountTypeAPIKey,
+						Extra: map[string]any{
+							"claude_code_model_catalog": []any{
+								map[string]any{
+									"role":          "sonnet",
+									"display_name":  "Relay Sonnet",
+									"request_model": "relay-sonnet",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Request.Header.Set("User-Agent", "curl/8.0.0")
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.NotContains(t, modelIDsForTest(got.Data), "relay-sonnet")
+	require.Contains(t, modelIDsForTest(got.Data), "claude-sonnet-4-5")
 }
 
 func TestGatewayModels_CustomModelsListDisabledKeepsOriginalModels(t *testing.T) {
