@@ -2795,12 +2795,6 @@
         </div>
       </div>
 
-      <ClaudeCodeConfigEditor
-        v-if="form.platform === 'anthropic'"
-        v-model:catalog="claudeCodeCatalog"
-        v-model:effort-mappings="claudeCodeEffortMappings"
-      />
-
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
@@ -3665,8 +3659,6 @@ type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
-const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
-const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
 const webSearchGlobalEnabled = ref(false)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
@@ -4520,8 +4512,6 @@ const resetForm = () => {
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
-  claudeCodeCatalog.value = [createEmptyClaudeCodeCatalogEntry()]
-  claudeCodeEffortMappings.value = [createEmptyClaudeCodeEffortEntry()]
   // Reset quota control state
   windowCostEnabled.value = false
   windowCostLimit.value = null
@@ -4630,7 +4620,7 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
 }
 
 const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unknown> | undefined => {
-  if (form.platform !== 'anthropic') {
+  if (form.platform !== 'anthropic' || accountCategory.value !== 'apikey') {
     return base
   }
 
@@ -4650,7 +4640,6 @@ const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unk
   } else {
     extra.web_search_emulation = webSearchEmulationMode.value
   }
-  writeClaudeCodeConfigToExtra(extra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
 
   return Object.keys(extra).length > 0 ? extra : undefined
 }
@@ -5025,9 +5014,9 @@ const createAccountAndFinish = async (
     return
   }
   // Inject quota limits for apikey/bedrock accounts
-  let finalExtra = platform === 'anthropic' ? buildAnthropicExtra(extra) : extra
+  let finalExtra = extra
   if (type === 'apikey' || type === 'bedrock') {
-    const quotaExtra: Record<string, unknown> = { ...(finalExtra || {}) }
+    const quotaExtra: Record<string, unknown> = { ...(extra || {}) }
     if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
       quotaExtra.quota_limit = editQuotaLimit.value
     }
@@ -5971,7 +5960,7 @@ const handleCookieAuth = async (sessionKey: string) => {
           platform: form.platform,
           type: addMethod.value, // Use addMethod as type: 'oauth' or 'setup-token'
           credentials,
-          extra: buildAnthropicExtra(extra),
+          extra,
           proxy_id: form.proxy_id,
           concurrency: form.concurrency,
           load_factor: form.load_factor ?? undefined,

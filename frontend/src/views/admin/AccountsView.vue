@@ -177,7 +177,6 @@
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
-          @staggered-probe="handleStaggeredProbe"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -349,48 +348,6 @@
           <template #cell-last_used_at="{ value }">
             <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeTime(value) }}</span>
           </template>
-          <template #cell-token_refresh="{ row }">
-            <div v-if="row.token_refresh_state" class="w-56 max-w-56 space-y-1 text-xs">
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <span class="shrink-0 text-gray-500 dark:text-dark-400">{{ t('admin.accounts.tokenRefresh.atExpires') }}</span>
-                <span class="min-w-0 truncate font-mono text-gray-700 dark:text-gray-200" :title="formatTokenRefreshDate(row.token_refresh_state.access_token_expires_at)">
-                  {{ formatTokenRefreshDate(row.token_refresh_state.access_token_expires_at) }}
-                </span>
-              </div>
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <span class="shrink-0 text-gray-500 dark:text-dark-400">{{ t('admin.accounts.tokenRefresh.windowStarts') }}</span>
-                <span class="min-w-0 truncate font-mono text-gray-700 dark:text-gray-200" :title="formatTokenRefreshDate(row.token_refresh_state.refresh_window_starts_at)">
-                  {{ formatTokenRefreshDate(row.token_refresh_state.refresh_window_starts_at) }}
-                </span>
-              </div>
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <span class="shrink-0 text-gray-500 dark:text-dark-400">{{ getTokenRefreshLastTimeLabel(row) }}</span>
-                <span class="min-w-0 truncate font-mono text-gray-700 dark:text-gray-200" :title="formatTokenRefreshDate(getTokenRefreshLastTime(row))">
-                  {{ formatTokenRefreshDate(getTokenRefreshLastTime(row)) }}
-                </span>
-              </div>
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <span class="shrink-0 text-gray-500 dark:text-dark-400">{{ t('admin.accounts.tokenRefresh.source') }}</span>
-                <span class="min-w-0 truncate font-medium text-gray-700 dark:text-gray-200" :title="getTokenRefreshSourceLabel(row.token_refresh_state.last_source)">
-                  {{ getTokenRefreshSourceLabel(row.token_refresh_state.last_source) }}
-                </span>
-              </div>
-              <div class="flex min-w-0 items-center justify-between gap-2">
-                <span class="shrink-0 text-gray-500 dark:text-dark-400">{{ t('admin.accounts.tokenRefresh.result') }}</span>
-                <span class="min-w-0 truncate" :class="getTokenRefreshStatusClass(row)" :title="getTokenRefreshStatusLabel(row)">
-                  {{ getTokenRefreshStatusLabel(row) }}
-                </span>
-              </div>
-              <div
-                v-if="getTokenRefreshError(row)"
-                class="max-w-full truncate text-red-600 dark:text-red-400"
-                :title="getTokenRefreshError(row)"
-              >
-                {{ getTokenRefreshError(row) }}
-              </div>
-            </div>
-            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-          </template>
           <template #cell-created_at="{ value }">
             <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
           </template>
@@ -437,12 +394,7 @@
     <CreateAccountModal :show="showCreate" :proxies="proxies" :groups="groups" @close="showCreate = false" @created="reload" />
     <EditAccountModal :show="showEdit" :account="edAcc" :proxies="proxies" :groups="groups" @close="showEdit = false" @updated="handleAccountUpdated" />
     <ReAuthAccountModal :show="showReAuth" :account="reAuthAcc" @close="closeReAuthModal" @reauthorized="handleAccountUpdated" />
-    <AccountTestModal
-      :show="showTest"
-      :account="testingAcc"
-      @close="closeTestModal"
-      @account-status-updated="handleAccountUpdated"
-    />
+    <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
@@ -468,277 +420,6 @@
         <span>{{ t('admin.accounts.dataExportIncludeProxies') }}</span>
       </label>
     </ConfirmDialog>
-    <ConfirmDialog
-      :show="showBatchRefreshDialog"
-      :title="t('admin.accounts.segmentedRefresh')"
-      :message="t('admin.accounts.batchRefreshConfirmMessage', { count: selIds.length })"
-      :confirm-text="t('admin.accounts.bulkActions.refreshToken')"
-      :cancel-text="t('common.cancel')"
-      :busy="batchRefreshSubmitting"
-      @confirm="confirmBatchRefreshToken"
-      @cancel="showBatchRefreshDialog = false"
-    >
-      <div class="space-y-4">
-        <div class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="batch-refresh-size">
-            {{ t('admin.accounts.batchGroupSize') }}
-          </label>
-          <input
-            id="batch-refresh-size"
-            v-model.number="batchRefreshGroupSize"
-            type="number"
-            min="1"
-            max="50"
-            :disabled="batchRefreshSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
-          <p class="text-xs text-gray-500 dark:text-gray-400">
-            {{ t('admin.accounts.batchGroupSizeHint') }}
-          </p>
-        </div>
-        <div class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="batch-refresh-concurrency">
-            {{ t('admin.accounts.batchRefreshConcurrency') }}
-          </label>
-          <input
-            id="batch-refresh-concurrency"
-            v-model.number="batchRefreshConcurrency"
-            type="number"
-            min="1"
-            max="10"
-            :disabled="batchRefreshSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
-          <p class="text-xs text-gray-500 dark:text-gray-400">
-            {{ t('admin.accounts.batchRefreshConcurrencyHint') }}
-          </p>
-        </div>
-        <div class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="batch-refresh-delay-mode">
-            {{ t('admin.accounts.delayMode') }}
-          </label>
-          <select
-            id="batch-refresh-delay-mode"
-            v-model="batchRefreshDelayMode"
-            :disabled="batchRefreshSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          >
-            <option value="fixed">{{ t('admin.accounts.delayModeFixed') }}</option>
-            <option value="random">{{ t('admin.accounts.delayModeRandom') }}</option>
-          </select>
-        </div>
-        <div v-if="batchRefreshDelayMode === 'fixed'" class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="batch-refresh-delay">
-            {{ t('admin.accounts.batchGroupDelaySeconds') }}
-          </label>
-          <input
-            id="batch-refresh-delay"
-            v-model.number="batchRefreshDelaySeconds"
-            type="number"
-            min="0"
-            max="600"
-            :disabled="batchRefreshSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
-        </div>
-        <div v-else class="grid grid-cols-2 gap-3">
-          <div class="space-y-2">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="batch-refresh-min-delay">
-              {{ t('admin.accounts.minDelaySeconds') }}
-            </label>
-            <input
-              id="batch-refresh-min-delay"
-              v-model.number="batchRefreshMinDelaySeconds"
-              type="number"
-              min="0"
-              max="600"
-              :disabled="batchRefreshSubmitting"
-              class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-            />
-          </div>
-          <div class="space-y-2">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="batch-refresh-max-delay">
-              {{ t('admin.accounts.maxDelaySeconds') }}
-            </label>
-            <input
-              id="batch-refresh-max-delay"
-              v-model.number="batchRefreshMaxDelaySeconds"
-              type="number"
-              min="0"
-              max="600"
-              :disabled="batchRefreshSubmitting"
-              class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-            />
-          </div>
-        </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">
-          {{ t('admin.accounts.batchGroupDelaySecondsHint') }}
-        </p>
-        <p class="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-          {{ batchRefreshProgressText }}
-        </p>
-        <div v-if="batchRefreshSubmitting" class="flex justify-end">
-          <button
-            type="button"
-            class="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-600 dark:bg-amber-900/30 dark:text-amber-200"
-            :disabled="batchRefreshStopRequested"
-            @click="requestStopBatchRefresh"
-          >
-            {{ batchRefreshStopRequested ? t('admin.accounts.batchStopRequested') : t('admin.accounts.batchStop') }}
-          </button>
-        </div>
-      </div>
-    </ConfirmDialog>
-    <ConfirmDialog
-      :show="showStaggeredProbeDialog"
-      :title="t('admin.accounts.staggeredProbe.title')"
-      :message="t('admin.accounts.staggeredProbe.confirmMessage', { count: selIds.length })"
-      :confirm-text="staggeredProbeSubmitting ? t('admin.accounts.staggeredProbe.running') : t('admin.accounts.staggeredProbe.start')"
-      :cancel-text="staggeredProbeSubmitting ? t('admin.accounts.staggeredProbe.hide') : t('common.cancel')"
-      @confirm="confirmStaggeredProbe"
-      @cancel="showStaggeredProbeDialog = false"
-    >
-      <div class="space-y-4">
-        <div class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="staggered-probe-recent-hours">
-            {{ t('admin.accounts.staggeredProbe.recentHours') }}
-          </label>
-          <input
-            id="staggered-probe-recent-hours"
-            v-model.number="staggeredProbeRecentHours"
-            type="number"
-            min="1"
-            max="720"
-            :disabled="staggeredProbeSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
-          <p class="text-xs text-gray-500 dark:text-gray-400">
-            {{ t('admin.accounts.staggeredProbe.recentHoursHint') }}
-          </p>
-        </div>
-        <div class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="staggered-probe-delay-mode">
-            {{ t('admin.accounts.delayMode') }}
-          </label>
-          <select
-            id="staggered-probe-delay-mode"
-            v-model="staggeredProbeDelayMode"
-            :disabled="staggeredProbeSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          >
-            <option value="fixed">{{ t('admin.accounts.delayModeFixed') }}</option>
-            <option value="random">{{ t('admin.accounts.delayModeRandom') }}</option>
-          </select>
-        </div>
-        <div v-if="staggeredProbeDelayMode === 'fixed'" class="space-y-2">
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="staggered-probe-fixed-delay">
-            {{ t('admin.accounts.staggeredProbe.fixedDelay') }}
-          </label>
-          <input
-            id="staggered-probe-fixed-delay"
-            v-model.number="staggeredProbeFixedDelayMinutes"
-            type="number"
-            min="0"
-            max="1440"
-            :disabled="staggeredProbeSubmitting"
-            class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-          />
-        </div>
-        <div v-else class="grid grid-cols-2 gap-3">
-          <div class="space-y-2">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="staggered-probe-min-delay">
-              {{ t('admin.accounts.staggeredProbe.minDelay') }}
-            </label>
-            <input
-              id="staggered-probe-min-delay"
-              v-model.number="staggeredProbeMinDelayMinutes"
-              type="number"
-              min="0"
-              max="1440"
-              :disabled="staggeredProbeSubmitting"
-              class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-            />
-          </div>
-          <div class="space-y-2">
-            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300" for="staggered-probe-max-delay">
-              {{ t('admin.accounts.staggeredProbe.maxDelay') }}
-            </label>
-            <input
-              id="staggered-probe-max-delay"
-              v-model.number="staggeredProbeMaxDelayMinutes"
-              type="number"
-              min="0"
-              max="1440"
-              :disabled="staggeredProbeSubmitting"
-              class="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-            />
-          </div>
-        </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">
-          {{ t('admin.accounts.staggeredProbe.delayHint') }}
-        </p>
-        <p class="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-200">
-          {{ t('admin.accounts.staggeredProbe.modelHint') }}
-        </p>
-        <p class="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-gray-800 dark:text-gray-300">
-          {{ staggeredProbeProgressText }}
-        </p>
-        <p class="rounded-md border border-gray-200 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
-          {{ t('admin.accounts.staggeredProbe.skipBreakdown', {
-            recentlyUsed: staggeredProbeSkipBreakdown.recentlyUsed,
-            recentlyProbed: staggeredProbeSkipBreakdown.recentlyProbed,
-            unschedulable: staggeredProbeSkipBreakdown.unschedulable
-          }) }}
-        </p>
-        <div v-if="staggeredProbeResults.length > 0" class="max-h-48 space-y-1 overflow-y-auto rounded-md border border-gray-200 p-2 text-xs dark:border-gray-700">
-          <div
-            v-for="item in staggeredProbeResults"
-            :key="item.accountId"
-            :class="item.status === 'success' ? 'text-green-600 dark:text-green-300' : item.status === 'skipped' ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-300'"
-          >
-            {{ item.accountName }}: {{ item.message }}
-          </div>
-        </div>
-      </div>
-    </ConfirmDialog>
-    <div
-      v-if="staggeredProbeFloatingVisible && staggeredProbeProgress.total > 0"
-      class="fixed bottom-4 right-4 z-40 w-80 rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-900"
-    >
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <p class="text-sm font-medium text-gray-900 dark:text-gray-100">
-            {{ t('admin.accounts.staggeredProbe.title') }}
-          </p>
-          <p class="mt-1 text-xs text-gray-600 dark:text-gray-300">
-            {{ staggeredProbeProgressText }}
-          </p>
-        </div>
-        <button
-          v-if="!staggeredProbeSubmitting"
-          type="button"
-          class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-          @click="staggeredProbeFloatingVisible = false"
-        >
-          {{ t('common.close') }}
-        </button>
-      </div>
-      <div class="mt-3 h-2 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
-        <div
-          class="h-full rounded-full bg-primary-600 transition-all"
-          :style="{ width: staggeredProbePercent + '%' }"
-        />
-      </div>
-      <div class="mt-3 flex justify-end">
-        <button
-          type="button"
-          class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
-          @click="showStaggeredProbeDialog = true"
-        >
-          {{ t('admin.accounts.staggeredProbe.viewDetails') }}
-        </button>
-      </div>
-    </div>
     <ErrorPassthroughRulesModal :show="showErrorPassthrough" @close="showErrorPassthrough = false" />
     <TLSFingerprintProfilesModal :show="showTLSFingerprintProfiles" @close="showTLSFingerprintProfiles = false" />
   </AppLayout>
@@ -780,32 +461,8 @@ import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/components/admin/TLSFingerprintProfilesModal.vue'
-import { extractApiErrorMessage } from '@/utils/apiError'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
-import {
-  chunkItems,
-  normalizeBatchConcurrency,
-  normalizeBatchDelayMode,
-  normalizeBatchDelayRangeSeconds,
-  normalizeBatchDelaySeconds,
-  normalizeBatchSize,
-  resolveBatchDelaySeconds,
-  type BatchDelayMode
-} from '@/utils/batchOperation'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
-import {
-  DEFAULT_PROBE_PROMPTS,
-  normalizeProbeDelayMode,
-  normalizeProbeIntervalMinutes,
-  normalizeProbeIntervalRangeMinutes,
-  normalizeProbeRecentHours,
-  pickProbePrompt,
-  resolveProbeDelayMs,
-  selectProbeModel,
-  shouldSkipRecentAccount,
-  shouldSkipRecentTimestamp,
-  type ProbeDelayMode
-} from '@/utils/staggeredProbe'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel } from '@/types'
 
@@ -862,29 +519,6 @@ const showSync = ref(false)
 const showImportData = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
-const showBatchRefreshDialog = ref(false)
-const batchRefreshGroupSize = ref(1)
-const batchRefreshDelayMode = ref<BatchDelayMode>('fixed')
-const batchRefreshDelaySeconds = ref(0)
-const batchRefreshMinDelaySeconds = ref(0)
-const batchRefreshMaxDelaySeconds = ref(0)
-const batchRefreshConcurrency = ref(1)
-const batchRefreshSubmitting = ref(false)
-const batchRefreshStopRequested = ref(false)
-const batchRefreshProgress = reactive({ current: 0, total: 0, success: 0, failed: 0, waiting: false })
-const showStaggeredProbeDialog = ref(false)
-const staggeredProbeSubmitting = ref(false)
-const staggeredProbeRecentHours = ref(24)
-const staggeredProbeDelayMode = ref<ProbeDelayMode>('random')
-const staggeredProbeFixedDelayMinutes = ref(0)
-const staggeredProbeMinDelayMinutes = ref(3)
-const staggeredProbeMaxDelayMinutes = ref(15)
-const staggeredProbeProgress = reactive({ current: 0, total: 0, success: 0, failed: 0, skipped: 0, waiting: false })
-const staggeredProbeResults = ref<Array<{ accountId: number; accountName: string; status: 'success' | 'failed' | 'skipped'; message: string }>>([])
-const staggeredProbeLastPromptByAccountId = reactive<Record<string, string>>({})
-const staggeredProbeLastRunAtByAccountId = reactive<Record<string, string>>({})
-const staggeredProbeSkipBreakdown = reactive({ recentlyUsed: 0, recentlyProbed: 0, unschedulable: 0 })
-const staggeredProbeFloatingVisible = ref(false)
 const showBulkEdit = ref(false)
 const bulkEditTarget = ref<AccountBulkEditTarget | null>(null)
 const showTempUnsched = ref(false)
@@ -913,7 +547,7 @@ const exportingData = ref(false)
 const showAccountToolsDropdown = ref(false)
 const accountToolsDropdownRef = ref<HTMLElement | null>(null)
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'rate_multiplier', 'next_reset', 'auto_pool', 'locked_proxy']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'rate_multiplier']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
 
 // Sorting settings
@@ -931,23 +565,16 @@ const ACCOUNT_SORTABLE_KEYS = new Set([
   'priority',
   'rate_multiplier',
   'last_used_at',
-  'token_refresh',
   'created_at',
   'expires_at'
 ])
-const toAccountApiSortKey = (key: string) => {
-  return key === 'token_refresh' ? 'access_token_expires_at' : key
-}
-const normalizeStoredAccountSortKey = (key: string) => {
-  return key === 'access_token_expires_at' ? 'token_refresh' : key
-}
 const loadInitialAccountSortState = (): AccountSortState => {
   const fallback: AccountSortState = { sort_by: 'name', sort_order: 'asc' }
   try {
     const raw = localStorage.getItem(ACCOUNT_SORT_STORAGE_KEY)
     if (!raw) return fallback
     const parsed = JSON.parse(raw) as { key?: string; order?: string }
-    const key = normalizeStoredAccountSortKey(typeof parsed.key === 'string' ? parsed.key : '')
+    const key = typeof parsed.key === 'string' ? parsed.key : ''
     if (!ACCOUNT_SORTABLE_KEYS.has(key)) return fallback
     return {
       sort_by: key,
@@ -963,18 +590,6 @@ const sortState = reactive<AccountSortState>(loadInitialAccountSortState())
 const showAutoRefreshDropdown = ref(false)
 const autoRefreshDropdownRef = ref<HTMLElement | null>(null)
 const AUTO_REFRESH_STORAGE_KEY = 'account-auto-refresh'
-const BATCH_REFRESH_CONCURRENCY_STORAGE_KEY = 'account-batch-refresh-concurrency'
-const BATCH_REFRESH_GROUP_SIZE_STORAGE_KEY = 'account-batch-refresh-group-size'
-const BATCH_REFRESH_DELAY_MODE_STORAGE_KEY = 'account-batch-refresh-delay-mode'
-const BATCH_REFRESH_DELAY_STORAGE_KEY = 'account-batch-refresh-delay-seconds'
-const BATCH_REFRESH_MIN_DELAY_STORAGE_KEY = 'account-batch-refresh-min-delay-seconds'
-const BATCH_REFRESH_MAX_DELAY_STORAGE_KEY = 'account-batch-refresh-max-delay-seconds'
-const STAGGERED_PROBE_RECENT_HOURS_STORAGE_KEY = 'account-staggered-probe-recent-hours'
-const STAGGERED_PROBE_DELAY_MODE_STORAGE_KEY = 'account-staggered-probe-delay-mode'
-const STAGGERED_PROBE_FIXED_DELAY_STORAGE_KEY = 'account-staggered-probe-fixed-delay-minutes'
-const STAGGERED_PROBE_MIN_DELAY_STORAGE_KEY = 'account-staggered-probe-min-delay-minutes'
-const STAGGERED_PROBE_MAX_DELAY_STORAGE_KEY = 'account-staggered-probe-max-delay-minutes'
-const STAGGERED_PROBE_LAST_RUN_MAP_STORAGE_KEY = 'account-staggered-probe-last-run-map'
 const autoRefreshIntervals = [5, 10, 15, 30] as const
 const autoRefreshEnabled = ref(false)
 const autoRefreshIntervalSeconds = ref<(typeof autoRefreshIntervals)[number]>(30)
@@ -1139,101 +754,9 @@ const saveAutoRefreshToStorage = () => {
   }
 }
 
-const loadSavedBatchRefreshSettings = () => {
-  try {
-    batchRefreshConcurrency.value = normalizeBatchConcurrency(localStorage.getItem(BATCH_REFRESH_CONCURRENCY_STORAGE_KEY))
-    batchRefreshGroupSize.value = normalizeBatchSize(localStorage.getItem(BATCH_REFRESH_GROUP_SIZE_STORAGE_KEY))
-    batchRefreshDelayMode.value = normalizeBatchDelayMode(localStorage.getItem(BATCH_REFRESH_DELAY_MODE_STORAGE_KEY))
-    batchRefreshDelaySeconds.value = normalizeBatchDelaySeconds(localStorage.getItem(BATCH_REFRESH_DELAY_STORAGE_KEY))
-    const delayRange = normalizeBatchDelayRangeSeconds(
-      localStorage.getItem(BATCH_REFRESH_MIN_DELAY_STORAGE_KEY),
-      localStorage.getItem(BATCH_REFRESH_MAX_DELAY_STORAGE_KEY)
-    )
-    batchRefreshMinDelaySeconds.value = delayRange.min
-    batchRefreshMaxDelaySeconds.value = delayRange.max
-  } catch (e) {
-    console.error('Failed to load batch refresh settings:', e)
-  }
-}
-
-const saveBatchRefreshSettingsToStorage = (
-  concurrency: number,
-  groupSize: number,
-  delayMode: BatchDelayMode,
-  delaySeconds: number,
-  minDelaySeconds: number,
-  maxDelaySeconds: number
-) => {
-  try {
-    localStorage.setItem(BATCH_REFRESH_CONCURRENCY_STORAGE_KEY, String(concurrency))
-    localStorage.setItem(BATCH_REFRESH_GROUP_SIZE_STORAGE_KEY, String(groupSize))
-    localStorage.setItem(BATCH_REFRESH_DELAY_MODE_STORAGE_KEY, delayMode)
-    localStorage.setItem(BATCH_REFRESH_DELAY_STORAGE_KEY, String(delaySeconds))
-    localStorage.setItem(BATCH_REFRESH_MIN_DELAY_STORAGE_KEY, String(minDelaySeconds))
-    localStorage.setItem(BATCH_REFRESH_MAX_DELAY_STORAGE_KEY, String(maxDelaySeconds))
-  } catch (e) {
-    console.error('Failed to save batch refresh settings:', e)
-  }
-}
-
-const loadSavedStaggeredProbeSettings = () => {
-  try {
-    const savedRecentHours = localStorage.getItem(STAGGERED_PROBE_RECENT_HOURS_STORAGE_KEY)
-    if (savedRecentHours !== null) {
-      staggeredProbeRecentHours.value = normalizeProbeRecentHours(savedRecentHours)
-    }
-    staggeredProbeDelayMode.value = normalizeProbeDelayMode(localStorage.getItem(STAGGERED_PROBE_DELAY_MODE_STORAGE_KEY))
-    const savedFixedDelay = localStorage.getItem(STAGGERED_PROBE_FIXED_DELAY_STORAGE_KEY)
-    const savedMinDelay = localStorage.getItem(STAGGERED_PROBE_MIN_DELAY_STORAGE_KEY)
-    const savedMaxDelay = localStorage.getItem(STAGGERED_PROBE_MAX_DELAY_STORAGE_KEY)
-    if (savedFixedDelay !== null) {
-      staggeredProbeFixedDelayMinutes.value = normalizeProbeIntervalMinutes(savedFixedDelay)
-    }
-    if (savedMinDelay !== null) {
-      staggeredProbeMinDelayMinutes.value = normalizeProbeIntervalMinutes(savedMinDelay)
-    }
-    if (savedMaxDelay !== null) {
-      staggeredProbeMaxDelayMinutes.value = normalizeProbeIntervalMinutes(savedMaxDelay)
-    }
-    const savedLastRuns = localStorage.getItem(STAGGERED_PROBE_LAST_RUN_MAP_STORAGE_KEY)
-    if (savedLastRuns) {
-      const parsed = JSON.parse(savedLastRuns) as Record<string, string>
-      Object.entries(parsed).forEach(([accountId, value]) => {
-        if (typeof value === 'string') {
-          staggeredProbeLastRunAtByAccountId[accountId] = value
-        }
-      })
-    }
-  } catch (e) {
-    console.error('Failed to load staggered probe settings:', e)
-  }
-}
-
-const saveStaggeredProbeSettingsToStorage = () => {
-  try {
-    localStorage.setItem(STAGGERED_PROBE_RECENT_HOURS_STORAGE_KEY, String(staggeredProbeRecentHours.value))
-    localStorage.setItem(STAGGERED_PROBE_DELAY_MODE_STORAGE_KEY, staggeredProbeDelayMode.value)
-    localStorage.setItem(STAGGERED_PROBE_FIXED_DELAY_STORAGE_KEY, String(staggeredProbeFixedDelayMinutes.value))
-    localStorage.setItem(STAGGERED_PROBE_MIN_DELAY_STORAGE_KEY, String(staggeredProbeMinDelayMinutes.value))
-    localStorage.setItem(STAGGERED_PROBE_MAX_DELAY_STORAGE_KEY, String(staggeredProbeMaxDelayMinutes.value))
-  } catch (e) {
-    console.error('Failed to save staggered probe settings:', e)
-  }
-}
-
-const saveStaggeredProbeLastRunMapToStorage = () => {
-  try {
-    localStorage.setItem(STAGGERED_PROBE_LAST_RUN_MAP_STORAGE_KEY, JSON.stringify(staggeredProbeLastRunAtByAccountId))
-  } catch (e) {
-    console.error('Failed to save staggered probe timestamps:', e)
-  }
-}
-
 if (typeof window !== 'undefined') {
   loadSavedColumns()
   loadSavedAutoRefresh()
-  loadSavedBatchRefreshSettings()
-  loadSavedStaggeredProbeSettings()
 }
 
 const setAutoRefreshEnabled = (enabled: boolean) => {
@@ -1292,7 +815,7 @@ const {
     privacy_mode: '',
     group: '',
     search: '',
-    sort_by: toAccountApiSortKey(sortState.sort_by),
+    sort_by: sortState.sort_by,
     sort_order: sortState.sort_order
   }
 })
@@ -1383,7 +906,7 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   sortState.sort_by = key
   sortState.sort_order = order
   const requestParams = params as any
-  requestParams.sort_by = toAccountApiSortKey(key)
+  requestParams.sort_by = key
   requestParams.sort_order = order
   pagination.page = 1
   hasPendingListSync.value = false
@@ -1408,8 +931,6 @@ const isAnyModalOpen = computed(() => {
     showSync.value ||
     showImportData.value ||
     showExportDataDialog.value ||
-    showBatchRefreshDialog.value ||
-    showStaggeredProbeDialog.value ||
     showBulkEdit.value ||
     showTempUnsched.value ||
     showDeleteDialog.value ||
@@ -1442,7 +963,6 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
-    JSON.stringify(current.token_refresh_state || null) !== JSON.stringify(next.token_refresh_state || null) ||
     buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
   )
 }
@@ -1450,7 +970,6 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
 const syncAccountRefs = (nextAccount: Account) => {
   if (edAcc.value?.id === nextAccount.id) edAcc.value = nextAccount
   if (reAuthAcc.value?.id === nextAccount.id) reAuthAcc.value = nextAccount
-  if (testingAcc.value?.id === nextAccount.id) testingAcc.value = nextAccount
   if (tempUnschedAcc.value?.id === nextAccount.id) tempUnschedAcc.value = nextAccount
   if (deletingAcc.value?.id === nextAccount.id) deletingAcc.value = nextAccount
   if (menu.acc?.id === nextAccount.id) menu.acc = nextAccount
@@ -1703,7 +1222,6 @@ const allColumns = computed(() => {
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
-    { key: 'token_refresh', label: t('admin.accounts.columns.tokenRefresh'), sortable: true },
     { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
     { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },
@@ -1798,287 +1316,19 @@ const handleBulkResetStatus = async () => {
   }
 }
 const handleBulkRefreshToken = async () => {
-  if (selIds.value.length === 0) {
-    appStore.showError(t('admin.accounts.selectAccountsFirst'))
-    return
-  }
-  batchRefreshConcurrency.value = normalizeBatchConcurrency(batchRefreshConcurrency.value)
-  batchRefreshGroupSize.value = normalizeBatchSize(batchRefreshGroupSize.value)
-  batchRefreshDelayMode.value = normalizeBatchDelayMode(batchRefreshDelayMode.value)
-  batchRefreshDelaySeconds.value = normalizeBatchDelaySeconds(batchRefreshDelaySeconds.value)
-  const delayRange = normalizeBatchDelayRangeSeconds(batchRefreshMinDelaySeconds.value, batchRefreshMaxDelaySeconds.value)
-  batchRefreshMinDelaySeconds.value = delayRange.min
-  batchRefreshMaxDelaySeconds.value = delayRange.max
-  batchRefreshStopRequested.value = false
-  resetBatchProgress()
-  showBatchRefreshDialog.value = true
-}
-
-const requestStopBatchRefresh = () => {
-  if (!batchRefreshSubmitting.value) return
-  batchRefreshStopRequested.value = true
-  batchRefreshProgress.waiting = false
-}
-
-const readTestStreamResult = async (response: Response) => {
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`)
-  }
-  const reader = response.body?.getReader()
-  if (!reader) {
-    throw new Error('No response body')
-  }
-
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let success = false
-  let errorMessage = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      const jsonStr = line.slice(6).trim()
-      if (!jsonStr) continue
-      try {
-        const event = JSON.parse(jsonStr) as { type?: string; success?: boolean; error?: string; text?: string }
-        if (event.type === 'test_complete' || event.type === 'success' || event.success === true) {
-          success = event.success !== false
-        }
-        if (event.type === 'error' || event.error) {
-          errorMessage = event.error || event.text || t('common.error')
-        }
-      } catch {
-        // Ignore malformed SSE fragments; the final success/error event decides the result.
-      }
-    }
-  }
-
-  return { success, errorMessage }
-}
-
-const runStaggeredProbeAccount = async (account: Account, modelId: string, prompt: string) => {
-  const response = await fetch(`/api/v1/admin/accounts/${account.id}/test`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model_id: modelId,
-      prompt,
-      mode: 'default'
-    })
-  })
-  return readTestStreamResult(response)
-}
-
-const confirmBatchRefreshToken = async () => {
-  if (batchRefreshSubmitting.value) return
-  if (selIds.value.length === 0) {
-    showBatchRefreshDialog.value = false
-    appStore.showError(t('admin.accounts.selectAccountsFirst'))
-    return
-  }
-  const concurrency = normalizeBatchConcurrency(batchRefreshConcurrency.value)
-  const groupSize = normalizeBatchSize(batchRefreshGroupSize.value)
-  const delayMode = normalizeBatchDelayMode(batchRefreshDelayMode.value)
-  const delaySeconds = normalizeBatchDelaySeconds(batchRefreshDelaySeconds.value)
-  const delayRange = normalizeBatchDelayRangeSeconds(batchRefreshMinDelaySeconds.value, batchRefreshMaxDelaySeconds.value)
-  batchRefreshConcurrency.value = concurrency
-  batchRefreshGroupSize.value = groupSize
-  batchRefreshDelayMode.value = delayMode
-  batchRefreshDelaySeconds.value = delaySeconds
-  batchRefreshMinDelaySeconds.value = delayRange.min
-  batchRefreshMaxDelaySeconds.value = delayRange.max
-  saveBatchRefreshSettingsToStorage(concurrency, groupSize, delayMode, delaySeconds, delayRange.min, delayRange.max)
-
-  const batches = chunkItems(selIds.value, groupSize)
-  batchRefreshStopRequested.value = false
-  resetBatchProgress()
-  batchRefreshProgress.total = batches.length
-  batchRefreshSubmitting.value = true
+  if (!confirm(t('common.confirm'))) return
   try {
-    for (let index = 0; index < batches.length; index += 1) {
-      if (batchRefreshStopRequested.value) break
-      batchRefreshProgress.current = index + 1
-      batchRefreshProgress.waiting = false
-      const result = await adminAPI.accounts.batchRefresh(batches[index], concurrency)
-      batchRefreshProgress.success += result.success
-      batchRefreshProgress.failed += result.failed
-      const waitSeconds = resolveBatchDelaySeconds({
-        mode: delayMode,
-        fixedSeconds: delaySeconds,
-        minSeconds: delayRange.min,
-        maxSeconds: delayRange.max
-      })
-      if (index < batches.length - 1 && waitSeconds > 0) {
-        batchRefreshProgress.waiting = true
-        await sleepUntilBatchRefreshContinues(waitSeconds * 1000)
-        batchRefreshProgress.waiting = false
-      }
-    }
-    if (batchRefreshStopRequested.value) {
-      appStore.showInfo(t('admin.accounts.batchStopped', { success: batchRefreshProgress.success, failed: batchRefreshProgress.failed }))
-    } else if (batchRefreshProgress.failed > 0) {
-      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: batchRefreshProgress.success, failed: batchRefreshProgress.failed }))
+    const result = await adminAPI.accounts.batchRefresh(selIds.value)
+    if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
     } else {
-      appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: batchRefreshProgress.success }))
+      appStore.showSuccess(t('admin.accounts.bulkActions.refreshTokenSuccess', { count: result.success }))
       clearSelection()
     }
     reload()
   } catch (error) {
     console.error('Failed to bulk refresh token:', error)
-    appStore.showError(extractApiErrorMessage(error, t('common.error')))
-  } finally {
-    batchRefreshSubmitting.value = false
-    showBatchRefreshDialog.value = false
-    batchRefreshStopRequested.value = false
-    batchRefreshProgress.waiting = false
-  }
-}
-
-const handleStaggeredProbe = () => {
-  if (staggeredProbeSubmitting.value) {
-    showStaggeredProbeDialog.value = true
-    staggeredProbeFloatingVisible.value = true
-    return
-  }
-  if (selIds.value.length === 0) {
-    appStore.showError(t('admin.accounts.selectAccountsFirst'))
-    return
-  }
-  staggeredProbeRecentHours.value = normalizeProbeRecentHours(staggeredProbeRecentHours.value)
-  staggeredProbeDelayMode.value = normalizeProbeDelayMode(staggeredProbeDelayMode.value)
-  staggeredProbeFixedDelayMinutes.value = normalizeProbeIntervalMinutes(staggeredProbeFixedDelayMinutes.value)
-  const delayRange = normalizeProbeIntervalRangeMinutes(staggeredProbeMinDelayMinutes.value, staggeredProbeMaxDelayMinutes.value)
-  staggeredProbeMinDelayMinutes.value = delayRange.min
-  staggeredProbeMaxDelayMinutes.value = delayRange.max
-  resetStaggeredProbeProgress()
-  staggeredProbeSkipBreakdown.recentlyUsed = staggeredProbeCandidateSummary.value.recentlyUsed
-  staggeredProbeSkipBreakdown.recentlyProbed = staggeredProbeCandidateSummary.value.recentlyProbed
-  staggeredProbeSkipBreakdown.unschedulable = staggeredProbeCandidateSummary.value.unschedulable
-  showStaggeredProbeDialog.value = true
-  staggeredProbeFloatingVisible.value = false
-}
-
-const confirmStaggeredProbe = async () => {
-  if (staggeredProbeSubmitting.value) return
-  const recentHours = normalizeProbeRecentHours(staggeredProbeRecentHours.value)
-  const delayMode = normalizeProbeDelayMode(staggeredProbeDelayMode.value)
-  const fixedDelay = normalizeProbeIntervalMinutes(staggeredProbeFixedDelayMinutes.value)
-  const delayRange = normalizeProbeIntervalRangeMinutes(staggeredProbeMinDelayMinutes.value, staggeredProbeMaxDelayMinutes.value)
-  staggeredProbeRecentHours.value = recentHours
-  staggeredProbeDelayMode.value = delayMode
-  staggeredProbeFixedDelayMinutes.value = fixedDelay
-  staggeredProbeMinDelayMinutes.value = delayRange.min
-  staggeredProbeMaxDelayMinutes.value = delayRange.max
-  saveStaggeredProbeSettingsToStorage()
-
-  const candidates = [...staggeredProbeCandidates.value]
-  resetStaggeredProbeProgress()
-  staggeredProbeSkipBreakdown.recentlyUsed = staggeredProbeCandidateSummary.value.recentlyUsed
-  staggeredProbeSkipBreakdown.recentlyProbed = staggeredProbeCandidateSummary.value.recentlyProbed
-  staggeredProbeSkipBreakdown.unschedulable = staggeredProbeCandidateSummary.value.unschedulable
-  staggeredProbeProgress.skipped = staggeredProbeSkipBreakdown.recentlyUsed + staggeredProbeSkipBreakdown.recentlyProbed + staggeredProbeSkipBreakdown.unschedulable
-  staggeredProbeProgress.total = candidates.length
-  if (candidates.length === 0) {
-    appStore.showInfo(t('admin.accounts.staggeredProbe.noCandidates'))
-    return
-  }
-
-  staggeredProbeSubmitting.value = true
-  staggeredProbeFloatingVisible.value = true
-  showStaggeredProbeDialog.value = false
-  try {
-    for (let index = 0; index < candidates.length; index += 1) {
-      const account = candidates[index]
-      staggeredProbeProgress.current = index + 1
-      staggeredProbeProgress.waiting = false
-      const prompt = pickProbePrompt(DEFAULT_PROBE_PROMPTS, staggeredProbeLastPromptByAccountId[String(account.id)])
-      staggeredProbeLastPromptByAccountId[String(account.id)] = prompt
-      staggeredProbeLastRunAtByAccountId[String(account.id)] = new Date().toISOString()
-      saveStaggeredProbeLastRunMapToStorage()
-
-      try {
-        const models = await adminAPI.accounts.getAvailableModels(account.id)
-        const modelId = selectProbeModel(account.platform, models)
-        if (!modelId) {
-          staggeredProbeProgress.failed += 1
-          staggeredProbeResults.value.push({
-            accountId: account.id,
-            accountName: account.name,
-            status: 'failed',
-            message: t('admin.accounts.staggeredProbe.noModel')
-          })
-        } else {
-          const result = await runStaggeredProbeAccount(account, modelId, prompt)
-          if (result.success) {
-            staggeredProbeProgress.success += 1
-            staggeredProbeResults.value.push({
-              accountId: account.id,
-              accountName: account.name,
-              status: 'success',
-              message: t('admin.accounts.staggeredProbe.resultSuccessWithModel', { model: modelId })
-            })
-          } else {
-            staggeredProbeProgress.failed += 1
-            staggeredProbeResults.value.push({
-              accountId: account.id,
-              accountName: account.name,
-              status: 'failed',
-              message: result.errorMessage || t('admin.accounts.staggeredProbe.resultFailed')
-            })
-          }
-        }
-      } catch (error) {
-        staggeredProbeProgress.failed += 1
-        staggeredProbeResults.value.push({
-          accountId: account.id,
-          accountName: account.name,
-          status: 'failed',
-          message: extractApiErrorMessage(error, t('common.error'))
-        })
-      }
-
-      if (index < candidates.length - 1) {
-        const delayMs = resolveProbeDelayMs({
-          mode: delayMode,
-          fixedMinutes: fixedDelay,
-          minMinutes: delayRange.min,
-          maxMinutes: delayRange.max
-        })
-        if (delayMs > 0) {
-          staggeredProbeProgress.waiting = true
-          await sleepUntilStaggeredProbeContinues(delayMs)
-          staggeredProbeProgress.waiting = false
-        }
-      }
-    }
-
-    if (staggeredProbeProgress.failed > 0) {
-      appStore.showError(t('admin.accounts.staggeredProbe.doneWithFailures', {
-        success: staggeredProbeProgress.success,
-        failed: staggeredProbeProgress.failed,
-        skipped: staggeredProbeProgress.skipped
-      }))
-    } else {
-      appStore.showSuccess(t('admin.accounts.staggeredProbe.done', {
-        success: staggeredProbeProgress.success,
-        skipped: staggeredProbeProgress.skipped
-      }))
-    }
-    reload()
-  } finally {
-    staggeredProbeSubmitting.value = false
-    staggeredProbeProgress.waiting = false
-    staggeredProbeFloatingVisible.value = true
+    appStore.showError(String(error))
   }
 }
 const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
@@ -2244,7 +1494,7 @@ const buildAccountQueryFilters = () => ({
   group: params.group || '',
   privacy_mode: params.privacy_mode || '',
   search: params.search || '',
-  sort_by: toAccountApiSortKey(sortState.sort_by),
+  sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
 })
 const accountMatchesCurrentFilters = (account: Account) => {
@@ -2401,22 +1651,8 @@ const handleRefresh = async (a: Account) => {
     const updated = await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
-    appStore.showSuccess(t('admin.accounts.bulkActions.singleRefreshSuccess', { name: updated.name || a.name }))
-  } catch (error: any) {
+  } catch (error) {
     console.error('Failed to refresh credentials:', error)
-    try {
-      const latest = await adminAPI.accounts.getById(a.id)
-      patchAccountInList(latest)
-      enterAutoRefreshSilentWindow()
-    } catch (syncError) {
-      console.error('Failed to sync account after refresh error:', syncError)
-    }
-    const message =
-      error?.response?.data?.message ||
-      error?.response?.data?.error ||
-      error?.message ||
-      t('admin.accounts.bulkActions.singleRefreshFailed')
-    appStore.showError(message)
   }
 }
 const handleRecoverState = async (a: Account) => {
@@ -2553,89 +1789,6 @@ const proxyExpiryBadge = (p: AccountProxy): string => proxyExpiryBadgeClass(p.ex
 const proxyExpiryText = (p: AccountProxy): string => {
   const { key, params } = proxyExpiryLabelKey(p.expires_at, p.status)
   return params ? t(key, params) : t(key)
-}
-
-const formatTokenRefreshDate = (value?: string | null) => {
-  if (!value) return '-'
-  return formatDateTime(
-    new Date(value),
-    {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    },
-    'sv-SE'
-  )
-}
-
-const getTokenRefreshLastTime = (account: Account) => {
-  const state = account.token_refresh_state
-  if (!state) return null
-  if (state.last_result === 'failed' || state.last_result === 'save_failed') {
-    return state.last_error_at || state.last_attempt_at || state.background_last_error_at || state.background_last_checked_at || null
-  }
-  return state.last_success_at || state.background_last_success_at || state.last_attempt_at || state.background_last_checked_at || null
-}
-
-const getTokenRefreshLastTimeLabel = (account: Account) => {
-  const state = account.token_refresh_state
-  if (!state) return t('admin.accounts.tokenRefresh.lastRefresh')
-  if (state.last_result === 'failed' || state.last_result === 'save_failed') {
-    return t('admin.accounts.tokenRefresh.lastAttempt')
-  }
-  if (state.last_success_at || state.background_last_success_at) {
-    return t('admin.accounts.tokenRefresh.lastSuccess')
-  }
-  return t('admin.accounts.tokenRefresh.lastRefresh')
-}
-
-const getTokenRefreshStatusLabel = (account: Account) => {
-  const state = account.token_refresh_state
-  if (!state) return '-'
-  if (state.risk_level === 'failed' || state.last_result === 'failed' || state.last_result === 'save_failed') {
-    return t('admin.accounts.tokenRefresh.failed')
-  }
-  const rtStatus = String(state.refresh_token_status || state.background_refresh_token_status || '')
-  if (state.risk_level === 'high_risk') return t('admin.accounts.tokenRefresh.highRisk')
-  if (state.risk_level === 'watch') return t('admin.accounts.tokenRefresh.watch')
-  if (rtStatus === 'rotated') return t('admin.accounts.tokenRefresh.rtRotated')
-  if (rtStatus === 'unchanged') return t('admin.accounts.tokenRefresh.rtUnchanged')
-  if (rtStatus === 'response_missing_preserved_old') return t('admin.accounts.tokenRefresh.rtPreserved')
-  if (rtStatus === 'missing_after_refresh') return t('admin.accounts.tokenRefresh.rtMissing')
-  if (rtStatus === 'save_failed') return t('admin.accounts.tokenRefresh.rtSaveFailed')
-  if (state.background_refresh_token_saved === true) return t('admin.accounts.tokenRefresh.rtSaved')
-  if (state.last_attempt_at || state.background_last_checked_at) return t('admin.accounts.tokenRefresh.checked')
-  return t('admin.accounts.tokenRefresh.pending')
-}
-
-const getTokenRefreshStatusClass = (account: Account) => {
-  const state = account.token_refresh_state
-  if (!state) return 'font-medium text-gray-500 dark:text-dark-400'
-  if (state.risk_level === 'failed' || state.last_result === 'failed' || state.last_result === 'save_failed') {
-    return 'font-medium text-red-600 dark:text-red-400'
-  }
-  if (state.risk_level === 'high_risk') return 'font-medium text-red-600 dark:text-red-400'
-  if (state.risk_level === 'watch') return 'font-medium text-amber-600 dark:text-amber-400'
-  if (state.risk_level === 'ok' || state.background_refresh_token_saved === true) {
-    return 'font-medium text-emerald-600 dark:text-emerald-400'
-  }
-  return 'font-medium text-amber-600 dark:text-amber-400'
-}
-
-const getTokenRefreshSourceLabel = (source?: string) => {
-  const key = String(source || '')
-  if (key === 'background') return t('admin.accounts.tokenRefresh.sourceBackground')
-  if (key === 'manual_single') return t('admin.accounts.tokenRefresh.sourceManualSingle')
-  if (key === 'manual_batch') return t('admin.accounts.tokenRefresh.sourceManualBatch')
-  if (key === 'request') return t('admin.accounts.tokenRefresh.sourceRequest')
-  return '-'
-}
-
-const getTokenRefreshError = (account: Account) => {
-  const state = account.token_refresh_state
-  return state?.last_error || state?.background_last_error || ''
 }
 
 // 滚动时关闭操作菜单（不关闭列设置下拉菜单）

@@ -119,15 +119,6 @@
           {{ isLoading ? t('auth.signingIn') : t('auth.signIn') }}
         </button>
 
-        <button
-          v-if="devPreviewAvailable"
-          type="button"
-          class="btn btn-secondary w-full"
-          @click="handleDevPreviewLogin"
-        >
-          进入开发预览管理后台
-        </button>
-
         <LoginAgreementPrompt
           v-if="loginAgreementEnabled"
           :accepted="agreementAccepted"
@@ -225,7 +216,6 @@ import { getPublicSettings, isTotp2FARequired, isWeChatWebOAuthEnabled } from '@
 import type { LoginAgreementDocument, TotpLoginResponse } from '@/types'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { clearAllAffiliateReferralCodes } from '@/utils/oauthAffiliate'
-import { enableDevPreviewAdmin, isDevPreviewAvailable } from '@/devPreview'
 
 const { t } = useI18n()
 const LOGIN_AGREEMENT_STORAGE_KEY = 'sub2api_login_agreement_consent'
@@ -242,7 +232,6 @@ const isLoading = ref<boolean>(false)
 const errorMessage = ref<string>('')
 const showPassword = ref<boolean>(false)
 const publicSettingsLoaded = ref<boolean>(false)
-const devPreviewAvailable = isDevPreviewAvailable()
 
 // Public settings
 const turnstileEnabled = ref<boolean>(false)
@@ -525,13 +514,6 @@ async function handleLogin(): Promise<void> {
   } finally {
     isLoading.value = false
   }
-}
-
-async function handleDevPreviewLogin(): Promise<void> {
-  enableDevPreviewAdmin()
-  authStore.checkAuth()
-  appStore.showSuccess('已启用本地开发预览模式')
-  await router.push('/admin/accounts')
 }
 
 // ==================== 2FA Handlers ====================

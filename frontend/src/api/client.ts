@@ -3,14 +3,7 @@
  * Base client with interceptors for authentication, token refresh, and error handling
  */
 
-import axios, {
-  AxiosInstance,
-  AxiosError,
-  InternalAxiosRequestConfig,
-  AxiosResponse,
-  AxiosHeaders,
-  type AxiosAdapter
-} from 'axios'
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios'
 import type { ApiResponse } from '@/types'
 import { getLocale } from '@/i18n'
 import { getAPIBaseURL } from './url'
@@ -22,7 +15,6 @@ export const apiClient: AxiosInstance = axios.create({
   baseURL: getAPIBaseURL(),
   withCredentials: true,
   timeout: 30000,
-  adapter: devPreviewAdapter,
   headers: {
     'Content-Type': 'application/json'
   }

@@ -1679,12 +1679,6 @@
         </div>
       </div>
 
-      <ClaudeCodeConfigEditor
-        v-if="account?.platform === 'anthropic'"
-        v-model:catalog="claudeCodeCatalog"
-        v-model:effort-mappings="claudeCodeEffortMappings"
-      />
-
       <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'apikey' || account?.type === 'bedrock')"
@@ -2776,8 +2770,6 @@ type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
-const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
-const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
 const webSearchGlobalEnabled = ref(false)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
@@ -4480,14 +4472,6 @@ const handleSubmit = async () => {
       }
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
-      updatePayload.extra = newExtra
-    }
-
-    if (props.account.platform === 'anthropic') {
-      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
-        (props.account.extra as Record<string, unknown>) || {}
-      const newExtra: Record<string, unknown> = { ...currentExtra }
-      writeClaudeCodeConfigToExtra(newExtra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
       updatePayload.extra = newExtra
     }
 

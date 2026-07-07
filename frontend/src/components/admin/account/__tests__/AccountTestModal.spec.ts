@@ -2,17 +2,15 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AccountTestModal from '../AccountTestModal.vue'
 
-const { getAvailableModels, getById, copyToClipboard } = vi.hoisted(() => ({
+const { getAvailableModels, copyToClipboard } = vi.hoisted(() => ({
   getAvailableModels: vi.fn(),
-  getById: vi.fn(),
   copyToClipboard: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
-      getAvailableModels,
-      getById
+      getAvailableModels
     }
   }
 }))
@@ -88,38 +86,8 @@ function mountModal(account: Record<string, unknown> = {
   })
 }
 
-function mountOpenAIModal() {
-  return mount(AccountTestModal, {
-    props: {
-      show: false,
-      account: {
-        id: 42,
-        name: 'OpenAI OAuth',
-        platform: 'openai',
-        type: 'oauth',
-        status: 'active',
-        credentials: {},
-        extra: {}
-      }
-    } as any,
-    global: {
-      stubs: {
-        BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
-        Select: { template: '<div class="select-stub"></div>' },
-        TextArea: {
-          props: ['modelValue'],
-          emits: ['update:modelValue'],
-          template: '<textarea class="textarea-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
-        },
-        Icon: true
-      }
-    }
-  })
-}
-
 describe('AccountTestModal', () => {
   beforeEach(() => {
-    getById.mockReset()
     getAvailableModels.mockResolvedValue([
       { id: 'gemini-2.0-flash', display_name: 'Gemini 2.0 Flash' },
       { id: 'gemini-2.5-flash-image', display_name: 'Gemini 2.5 Flash Image' },
