@@ -340,7 +340,6 @@ type OpenAIGatewayService struct {
 	usageBillingRepo      UsageBillingRepository
 	userRepo              UserRepository
 	userSubRepo           UserSubscriptionRepository
-	groupRepo             GroupRepository
 	cache                 GatewayCache
 	cfg                   *config.Config
 	codexDetector         CodexClientRestrictionDetector
@@ -391,7 +390,6 @@ func NewOpenAIGatewayService(
 	userRepo UserRepository,
 	userSubRepo UserSubscriptionRepository,
 	userGroupRateRepo UserGroupRateRepository,
-	groupRepo GroupRepository,
 	cache GatewayCache,
 	cfg *config.Config,
 	schedulerSnapshot *SchedulerSnapshotService,
@@ -415,7 +413,6 @@ func NewOpenAIGatewayService(
 		usageBillingRepo:    usageBillingRepo,
 		userRepo:            userRepo,
 		userSubRepo:         userSubRepo,
-		groupRepo:           groupRepo,
 		cache:               cache,
 		cfg:                 cfg,
 		codexDetector:       NewOpenAICodexClientRestrictionDetector(cfg),
@@ -962,19 +959,6 @@ func isolateOpenAISessionID(apiKeyID int64, raw string) string {
 	_, _ = fmt.Fprintf(h, "k%d:", apiKeyID)
 	_, _ = h.WriteString(raw)
 	return fmt.Sprintf("%016x", h.Sum64())
-}
-
-// isOpenAIAllowedCodexPluginRequest 判断入站请求是否命中账号显式放行的 Codex 插件签名。
-// 用于 OAuth passthrough 的 UA 兜底：命中时保留客户端真实 UA，同时仍由固定 registry 校验 originator 与 UA。
-func isOpenAIAllowedCodexPluginRequest(c *gin.Context, account *Account) bool {
-	if c == nil || account == nil {
-		return false
-	}
-	allowedClients := account.GetCodexCLIOnlyAllowedClients()
-	if len(allowedClients) == 0 {
-		return false
-	}
-	return openai.MatchAllowedClients(c.GetHeader("User-Agent"), c.GetHeader("originator"), allowedClients)
 }
 
 func logCodexCLIOnlyDetection(ctx context.Context, c *gin.Context, account *Account, apiKeyID int64, result CodexClientRestrictionDetectionResult, body []byte) {
@@ -1918,11 +1902,6 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	selectedCompactTier := -1
 	compactBlocked := false
 	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, groupID)
-	candidateAccounts := make([]*Account, 0, len(accounts))
-	for i := range accounts {
-		candidateAccounts = append(candidateAccounts, &accounts[i])
-	}
-	ordering := s.resolveAccountOrderingOptions(ctx, groupID, candidateAccounts, false)
 
 	for i := range accounts {
 		acc := &accounts[i]
@@ -1970,7 +1949,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 			continue
 		}
 
-		if s.isBetterAccount(fresh, selected, ordering) {
+		if s.isBetterAccount(fresh, selected) {
 			selected = fresh
 			selectedCompactTier = compactTier
 		}
@@ -1984,36 +1963,32 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 //
 // isBetterAccount checks if candidate is better than current.
 // Rules: higher priority (lower value) wins; same priority: never used > least recently used.
-func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account, ordering accountOrderingOptions) bool {
-	return isAccountBefore(candidate, current, ordering)
-}
-
-func (s *OpenAIGatewayService) resolveAccountOrderingOptions(ctx context.Context, groupID *int64, accounts []*Account, preferOAuth bool) accountOrderingOptions {
-	return accountOrderingOptions{
-		preferOAuth:                  preferOAuth,
-		preferEarlierOpenAIFreeReset: s.shouldPreferEarlierOpenAIFreeReset(ctx, groupID, accounts),
+func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account) bool {
+	// 优先级更高（数值更小）
+	// Higher priority (lower value)
+	if candidate.Priority < current.Priority {
+		return true
 	}
-}
-
-func (s *OpenAIGatewayService) shouldPreferEarlierOpenAIFreeReset(ctx context.Context, groupID *int64, accounts []*Account) bool {
-	if groupID == nil || len(accounts) == 0 {
+	if candidate.Priority > current.Priority {
 		return false
 	}
-	for _, account := range accounts {
-		if account == nil {
-			continue
-		}
-		if isOpenAIFreeResetPriorityGroupFromAccount(account, *groupID) {
-			return true
-		}
+
+	// 同优先级，比较最后使用时间
+	// Same priority, compare last used time
+	switch {
+	case candidate.LastUsedAt == nil && current.LastUsedAt != nil:
+		// candidate 从未使用，优先
+		return true
+	case candidate.LastUsedAt != nil && current.LastUsedAt == nil:
+		// current 从未使用，保持
+		return false
+	case candidate.LastUsedAt == nil && current.LastUsedAt == nil:
+		// 都未使用，保持
+		return false
+	default:
+		// 都使用过，选择最久未使用的
+		return candidate.LastUsedAt.Before(*current.LastUsedAt)
 	}
-	if s.groupRepo != nil {
-		group, err := s.groupRepo.GetByID(ctx, *groupID)
-		if err == nil && group != nil {
-			return isOpenAIFreeResetPriorityGroup(group.Name)
-		}
-	}
-	return false
 }
 
 // SelectAccountWithLoadAwareness selects an account with load-awareness and wait plan.
@@ -2202,9 +2177,26 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			return nil, false, nil
 		}
 
-		ordering := s.resolveAccountOrderingOptions(ctx, groupID, accountPtrsFromAccountWithLoad(available), false)
-		sortAccountWithLoadByPriorityLoadAndLastUsed(available, ordering)
-		shuffleWithinSortGroups(available, ordering)
+		sort.SliceStable(available, func(i, j int) bool {
+			a, b := available[i], available[j]
+			if a.account.Priority != b.account.Priority {
+				return a.account.Priority < b.account.Priority
+			}
+			if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+				return a.loadInfo.LoadRate < b.loadInfo.LoadRate
+			}
+			switch {
+			case a.account.LastUsedAt == nil && b.account.LastUsedAt != nil:
+				return true
+			case a.account.LastUsedAt != nil && b.account.LastUsedAt == nil:
+				return false
+			case a.account.LastUsedAt == nil && b.account.LastUsedAt == nil:
+				return false
+			default:
+				return a.account.LastUsedAt.Before(*b.account.LastUsedAt)
+			}
+		})
+		shuffleWithinSortGroups(available)
 
 		selectionOrder := make([]accountWithLoad, 0, len(available))
 		if requireCompact {
@@ -2255,8 +2247,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	loadMap, err := s.concurrencyService.GetAccountsLoadBatch(ctx, accountLoads)
 	if err != nil {
 		ordered := append([]*Account(nil), candidates...)
-		ordering := s.resolveAccountOrderingOptions(ctx, groupID, ordered, false)
-		sortAccountsByPriorityAndLastUsed(ordered, ordering)
+		sortAccountsByPriorityAndLastUsed(ordered, false)
 		if requireCompact {
 			ordered = prioritizeOpenAICompactAccounts(ordered)
 		}
@@ -2301,8 +2292,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	// ============ Layer 3: Fallback wait ============
-	ordering := s.resolveAccountOrderingOptions(ctx, groupID, candidates, false)
-	sortAccountsByPriorityAndLastUsed(candidates, ordering)
+	sortAccountsByPriorityAndLastUsed(candidates, false)
 	if requireCompact {
 		candidates = prioritizeOpenAICompactAccounts(candidates)
 	}
@@ -2743,19 +2733,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		disablePatch()
 	}
 
-	strippedClientImageGenerationTool := false
-	if isCodexCLI {
-		if override := account.CodexImageGenerationBridgeOverride(); override != nil && !*override {
-			decoded, decodeErr := ensureReqBody()
-			if decodeErr != nil {
-				return nil, decodeErr
-			}
-			if stripOpenAIResponsesImageGenerationTools(decoded) {
-				strippedClientImageGenerationTool = true
-				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Stripped client /responses image_generation tool due to account override")
-			}
-		}
-	}
 	apiKey := getAPIKeyFromContext(c)
 	imageGenerationAllowed := GroupAllowsImageGeneration(nil)
 	if apiKey != nil {
@@ -2790,10 +2767,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
 	if instructionsEmpty && !compatMessagesBridge {
 		markPatchSet("instructions", defaultCodexSynthInstructions(reqModel))
-	}
-	if strippedClientImageGenerationTool {
-		bodyModified = true
-		disablePatch()
 	}
 
 	billingModel := account.GetMappedModel(reqModel)
@@ -3797,9 +3770,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
-	// OAuth 安全透传：对非 Codex/已放行插件 UA 统一兜底，降低被上游风控拦截概率。
-	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) &&
-		!isOpenAIAllowedCodexPluginRequest(c, account) {
+	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
+	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 
