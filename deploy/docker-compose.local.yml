@@ -95,11 +95,9 @@ services:
       - JWT_EXPIRE_HOUR=${JWT_EXPIRE_HOUR:-24}
 
       # =======================================================================
-      # Token Refresh Configuration
+      # Setup Configuration
       # =======================================================================
-      # VPS default: refresh OAuth access tokens 12 hours before expiry.
-      # Override TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS in .env if needed.
-      - TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS=${TOKEN_REFRESH_REFRESH_BEFORE_EXPIRY_HOURS:-12}
+      - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
 
       # =======================================================================
       # TOTP (2FA) Configuration
@@ -141,10 +139,10 @@ services:
       # =======================================================================
       # Enable URL allowlist validation (false to skip allowlist checks)
       - SECURITY_URL_ALLOWLIST_ENABLED=${SECURITY_URL_ALLOWLIST_ENABLED:-false}
-      # Allow insecure HTTP URLs when allowlist is disabled (default: false, requires https)
-      - SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=${SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP:-false}
-      # Allow private IP addresses for upstream/pricing/CRS (for internal deployments)
-      - SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=${SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS:-false}
+      # Allow insecure HTTP URLs when allowlist is disabled (default: true; set to false to require https)
+      - SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=${SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP:-true}
+      # Allow private IP addresses for upstream/pricing/CRS (default: true; set to false to block private hosts)
+      - SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=${SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS:-true}
       # Upstream hosts whitelist (comma-separated, only used when enabled=true)
       - SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-}
 

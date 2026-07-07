@@ -149,22 +149,62 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Contains(t, recorder.Body.String(), "test_complete")
 }
 
-func TestCreateClaudeTestPayloadUsesCustomPrompt(t *testing.T) {
-	payload, err := createTestPayload("claude-sonnet-4-5-20250929", "explain uptime checks")
-	require.NoError(t, err)
+func TestAccountTestService_OpenAIShadowUsesParentCredentialsAndShadowModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, recorder := newTestContext()
 
-	payloadBytes, err := json.Marshal(payload)
-	require.NoError(t, err)
-	require.Equal(t, "explain uptime checks", gjson.GetBytes(payloadBytes, "messages.0.content.0.text").String())
-}
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
 
-func TestCreateClaudeTestPayloadDefaultsBlankPrompt(t *testing.T) {
-	payload, err := createTestPayload("claude-sonnet-4-5-20250929", "   ")
-	require.NoError(t, err)
+`))
 
-	payloadBytes, err := json.Marshal(payload)
+	parentID := int64(100)
+	parent := &Account{
+		ID:       parentID,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"access_token":       "parent-token",
+			"chatgpt_account_id": "org-parent",
+		},
+	}
+	shadow := &Account{
+		ID:              200,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeOAuth,
+		Status:          StatusActive,
+		ParentAccountID: &parentID,
+		QuotaDimension:  QuotaDimensionSpark,
+		Concurrency:     2,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-5.3-codex-spark": "gpt-5.3-codex-spark",
+			},
+		},
+	}
+
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{
+				parentID: parent,
+				200:      shadow,
+			},
+		},
+	}
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+
+	err := svc.TestAccountConnection(ctx, shadow.ID, "gpt-5.3-codex-spark", "", "")
 	require.NoError(t, err)
-	require.Equal(t, defaultClaudeTextTestPrompt, gjson.GetBytes(payloadBytes, "messages.0.content.0.text").String())
+	require.Len(t, upstream.requests, 1)
+	req := upstream.requests[0]
+	require.Equal(t, "Bearer parent-token", req.Header.Get("Authorization"))
+	require.Equal(t, "org-parent", req.Header.Get("chatgpt-account-id"))
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.3-codex-spark", gjson.GetBytes(body, "model").String())
+	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
 
 func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {

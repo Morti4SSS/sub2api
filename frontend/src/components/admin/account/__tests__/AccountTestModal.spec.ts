@@ -61,17 +61,17 @@ function createStreamResponse(lines: string[]) {
   } as Response
 }
 
-function mountModal() {
+function mountModal(account: Record<string, unknown> = {
+  id: 42,
+  name: 'Gemini Image Test',
+  platform: 'gemini',
+  type: 'apikey',
+  status: 'active'
+}) {
   return mount(AccountTestModal, {
     props: {
       show: false,
-      account: {
-        id: 42,
-        name: 'Gemini Image Test',
-        platform: 'gemini',
-        type: 'apikey',
-        status: 'active'
-      }
+      account
     } as any,
     global: {
       stubs: {
@@ -177,29 +177,28 @@ describe('AccountTestModal', () => {
     expect(preview.attributes('src')).toBe('data:image/png;base64,QUJD')
   })
 
-  it('OpenAI 文本测试会显示上次提示词并提交本次输入', async () => {
-    const getStoredItem = globalThis.localStorage.getItem as any
-    getStoredItem.mockImplementation((key: string) => {
-      if (key === 'auth_token') return 'test-token'
-      if (key === 'sub2api.accountTestPrompt.openai.text') return 'previous custom prompt'
-      return null
-    })
-    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.4', display_name: 'GPT-5.4' }])
+  it('grok 账号测试默认选择 Grok 模型', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'grok-4.3', display_name: 'Grok 4.3' },
+      { id: 'grok-build-0.1', display_name: 'Grok Build 0.1' }
+    ])
     global.fetch = vi.fn().mockResolvedValue(
       createStreamResponse([
-        'data: {"type":"test_start","model":"gpt-5.4"}\n',
+        'data: {"type":"test_start","model":"grok-4.3"}\n',
+        'data: {"type":"content","text":"ok"}\n',
         'data: {"type":"test_complete","success":true}\n'
       ])
     ) as any
 
-    const wrapper = mountOpenAIModal()
+    const wrapper = mountModal({
+      id: 13,
+      name: 'Grok Account',
+      platform: 'grok',
+      type: 'oauth',
+      status: 'active'
+    })
     await wrapper.setProps({ show: true })
     await flushPromises()
-
-    const promptInput = wrapper.find('textarea.textarea-stub')
-    expect(promptInput.exists()).toBe(true)
-    expect((promptInput.element as HTMLTextAreaElement).value).toBe('previous custom prompt')
-    await promptInput.setValue('new reusable prompt')
 
     const buttons = wrapper.findAll('button')
     const startButton = buttons.find((button) => button.text().includes('admin.accounts.startTest'))
@@ -207,172 +206,46 @@ describe('AccountTestModal', () => {
 
     await startButton!.trigger('click')
     await flushPromises()
-    await flushPromises()
 
+    expect(global.fetch).toHaveBeenCalledTimes(1)
     const [, request] = (global.fetch as any).mock.calls[0]
     expect(JSON.parse(request.body)).toEqual({
-      model_id: 'gpt-5.4',
-      prompt: 'new reusable prompt'
+      model_id: 'grok-4.3',
+      prompt: ''
     })
-    expect(globalThis.localStorage.setItem).toHaveBeenCalledWith(
-      'sub2api.accountTestPrompt.openai.text',
-      'new reusable prompt'
-    )
   })
 
-  it('401 token_invalidated 时会回拉账号状态并抛出更新事件', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.4', display_name: 'GPT-5.4' }])
-    getById.mockResolvedValue({
+  it('OpenAI Compact 探测会携带 compact 测试模式', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
       id: 42,
       name: 'OpenAI OAuth',
       platform: 'openai',
       type: 'oauth',
-      status: 'error',
-      error_message: 'Authentication failed (401)',
-      credentials: {},
-      extra: {}
+      status: 'active'
     })
-    global.fetch = vi.fn().mockResolvedValue(
-      createStreamResponse([
-        'data: {"type":"test_start","model":"gpt-5.4"}\n',
-        'data: {"type":"error","error":"API returned 401: {\\"error\\":{\\"code\\":\\"token_invalidated\\"}}"}\n',
-        'data: {"type":"test_complete","success":false,"error":"API returned 401: {\\"error\\":{\\"code\\":\\"token_invalidated\\"}}"}\n'
-      ])
-    ) as any
-
-    const wrapper = mount(AccountTestModal, {
-      props: {
-        show: true,
-        account: {
-          id: 42,
-          name: 'OpenAI OAuth',
-          platform: 'openai',
-          type: 'oauth',
-          status: 'active',
-          credentials: {},
-          extra: {}
-        }
-      } as any,
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
-          Select: { template: '<div class="select-stub"></div>' },
-          TextArea: {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<textarea class="textarea-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
-          },
-          Icon: true
-        }
-      }
-    })
-
+    await wrapper.setProps({ show: true })
     await flushPromises()
+
     ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
-    ;(wrapper.vm as any).testMode = 'default'
-    await (wrapper.vm as any).startTest()
-    await flushPromises()
-    await flushPromises()
-
-    expect(getById).toHaveBeenCalledWith(42)
-    const emitted = wrapper.emitted('account-status-updated')
-    expect(emitted).toBeTruthy()
-    expect(emitted?.[0]?.[0]?.status).toBe('error')
-    expect(wrapper.text()).toContain('error')
-  })
-
-  it('普通错误不会触发账号状态回拉', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.4', display_name: 'GPT-5.4' }])
-    global.fetch = vi.fn().mockResolvedValue(
-      createStreamResponse([
-        'data: {"type":"test_start","model":"gpt-5.4"}\n',
-        'data: {"type":"error","error":"API returned 500: upstream failed"}\n',
-        'data: {"type":"test_complete","success":false,"error":"API returned 500: upstream failed"}\n'
-      ])
-    ) as any
-
-    const wrapper = mount(AccountTestModal, {
-      props: {
-        show: true,
-        account: {
-          id: 42,
-          name: 'OpenAI OAuth',
-          platform: 'openai',
-          type: 'oauth',
-          status: 'active',
-          credentials: {},
-          extra: {}
-        }
-      } as any,
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
-          Select: { template: '<div class="select-stub"></div>' },
-          TextArea: {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<textarea class="textarea-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
-          },
-          Icon: true
-        }
-      }
-    })
-
-    await flushPromises()
-    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    ;(wrapper.vm as any).testMode = 'compact'
     await (wrapper.vm as any).startTest()
     await flushPromises()
 
-    expect(getById).not.toHaveBeenCalled()
-    expect(wrapper.emitted('account-status-updated')).toBeFalsy()
-  })
-
-  it('状态回拉失败时保留错误输出且不抛异常', async () => {
-    getAvailableModels.mockResolvedValue([{ id: 'gpt-5.4', display_name: 'GPT-5.4' }])
-    getById.mockRejectedValue(new Error('fetch latest failed'))
-    global.fetch = vi.fn().mockResolvedValue(
-      createStreamResponse([
-        'data: {"type":"test_start","model":"gpt-5.4"}\n',
-        'data: {"type":"error","error":"API returned 401: {\\"error\\":{\\"code\\":\\"token_invalidated\\"}}"}\n',
-        'data: {"type":"test_complete","success":false,"error":"API returned 401: {\\"error\\":{\\"code\\":\\"token_invalidated\\"}}"}\n'
-      ])
-    ) as any
-
-    const wrapper = mount(AccountTestModal, {
-      props: {
-        show: true,
-        account: {
-          id: 42,
-          name: 'OpenAI OAuth',
-          platform: 'openai',
-          type: 'oauth',
-          status: 'active',
-          credentials: {},
-          extra: {}
-        }
-      } as any,
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },
-          Select: { template: '<div class="select-stub"></div>' },
-          TextArea: {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<textarea class="textarea-stub" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
-          },
-          Icon: true
-        }
-      }
+    expect(global.fetch).toHaveBeenCalledTimes(1)
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toMatchObject({
+      model_id: 'gpt-5.4',
+      prompt: '',
+      mode: 'compact'
     })
-
-    await flushPromises()
-    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
-    await (wrapper.vm as any).startTest()
-    await flushPromises()
-    await flushPromises()
-
-    expect(getById).toHaveBeenCalledWith(42)
-    expect(wrapper.emitted('account-status-updated')).toBeFalsy()
-    expect(wrapper.text()).toContain('API returned 401')
   })
 })

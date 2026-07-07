@@ -4,6 +4,8 @@ package service
 
 import (
 	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 )
 
 func TestMatchWildcard(t *testing.T) {
@@ -320,68 +322,83 @@ func TestAccountGetMappedModel(t *testing.T) {
 	}
 }
 
-func TestAccountClaudeCodeModelCatalogConfig(t *testing.T) {
+func TestAccountGetModelMapping_AntigravityNormalizesGemini31ProAliases(t *testing.T) {
+	t.Parallel()
+
 	account := &Account{
-		Extra: map[string]any{
-			"claude_code_model_catalog": []any{
-				map[string]any{
-					"role":          "sonnet",
-					"display_name":  "glm-5.1",
-					"request_model": "glm-5.1",
-					"supports_1m":   true,
-					"capabilities":  []any{"effort", "max_effort", "thinking"},
-				},
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				domain.AntigravityGemini31ProAgentModel: domain.AntigravityGemini31ProAgentModel,
+				"gemini-3.1-pro-high":                   "gemini-3.1-pro-high",
+				"gemini-3.1-pro-preview":                "gemini-3.1-pro-high",
 			},
 		},
 	}
 
-	catalog := account.GetClaudeCodeModelCatalog()
-	if len(catalog) != 1 {
-		t.Fatalf("GetClaudeCodeModelCatalog() len = %d, want 1", len(catalog))
+	mapping := account.GetModelMapping()
+
+	if got := mapping["gemini-3.1-pro"]; got != domain.AntigravityGemini31ProAgentModel {
+		t.Fatalf("expected gemini-3.1-pro to map to %q, got %q", domain.AntigravityGemini31ProAgentModel, got)
 	}
-	if catalog[0].Role != "sonnet" {
-		t.Fatalf("Role = %q, want sonnet", catalog[0].Role)
+	if got := mapping["gemini-3.1-pro-high"]; got != domain.AntigravityGemini31ProAgentModel {
+		t.Fatalf("expected gemini-3.1-pro-high to map to %q, got %q", domain.AntigravityGemini31ProAgentModel, got)
 	}
-	if catalog[0].DisplayName != "glm-5.1" {
-		t.Fatalf("DisplayName = %q, want glm-5.1", catalog[0].DisplayName)
-	}
-	if catalog[0].RequestModel != "glm-5.1" {
-		t.Fatalf("RequestModel = %q, want glm-5.1", catalog[0].RequestModel)
-	}
-	if !catalog[0].Supports1M {
-		t.Fatalf("Supports1M = false, want true")
-	}
-	wantCapabilities := []string{"effort", "max_effort", "thinking"}
-	if len(catalog[0].Capabilities) != len(wantCapabilities) {
-		t.Fatalf("Capabilities = %#v, want %#v", catalog[0].Capabilities, wantCapabilities)
-	}
-	for i, want := range wantCapabilities {
-		if catalog[0].Capabilities[i] != want {
-			t.Fatalf("Capabilities[%d] = %q, want %q", i, catalog[0].Capabilities[i], want)
-		}
+	if got := mapping["gemini-3.1-pro-preview"]; got != domain.AntigravityGemini31ProAgentModel {
+		t.Fatalf("expected gemini-3.1-pro-preview to map to %q, got %q", domain.AntigravityGemini31ProAgentModel, got)
 	}
 }
 
-func TestClaudeCodeCatalogRequestModelMapsToUpstreamModel(t *testing.T) {
+func TestAccountGetModelMapping_AntigravityPreservesGemini31ProOverrides(t *testing.T) {
+	t.Parallel()
+
 	account := &Account{
-		Extra: map[string]any{
-			"claude_code_model_catalog": []any{
-				map[string]any{
-					"role":           "sonnet",
-					"display_name":   "glm-5.1",
-					"request_model":  "glm-5.1",
-					"upstream_model": "provider-glm-5.1",
-				},
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				domain.AntigravityGemini31ProAgentModel: domain.AntigravityGemini31ProAgentModel,
+				"gemini-3.1-pro-high":                   "custom-high",
+				"gemini-3.1-pro-preview":                "custom-preview",
 			},
 		},
 	}
 
-	got, matched := account.ResolveClaudeCodeCatalogModel("glm-5.1")
-	if !matched {
-		t.Fatalf("ResolveClaudeCodeCatalogModel matched = false, want true")
+	mapping := account.GetModelMapping()
+
+	if got := mapping["gemini-3.1-pro-high"]; got != "custom-high" {
+		t.Fatalf("expected gemini-3.1-pro-high override to be preserved, got %q", got)
 	}
-	if got != "provider-glm-5.1" {
-		t.Fatalf("ResolveClaudeCodeCatalogModel = %q, want provider-glm-5.1", got)
+	if got := mapping["gemini-3.1-pro-preview"]; got != "custom-preview" {
+		t.Fatalf("expected gemini-3.1-pro-preview override to be preserved, got %q", got)
+	}
+	if got := mapping["gemini-3.1-pro"]; got != domain.AntigravityGemini31ProAgentModel {
+		t.Fatalf("expected gemini-3.1-pro alias to default to %q, got %q", domain.AntigravityGemini31ProAgentModel, got)
+	}
+}
+
+func TestAccountGetModelMapping_AntigravityGemini31ProAliasesRespectWildcard(t *testing.T) {
+	t.Parallel()
+
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				domain.AntigravityGemini31ProAgentModel: domain.AntigravityGemini31ProAgentModel,
+				"gemini-3.1-*":                          "custom-wildcard",
+			},
+		},
+	}
+
+	mapping := account.GetModelMapping()
+
+	if got := mapping["gemini-3.1-pro"]; got != "" {
+		t.Fatalf("expected gemini-3.1-pro exact alias to stay unset when wildcard exists, got %q", got)
+	}
+	if got := mapping["gemini-3.1-pro-high"]; got != "" {
+		t.Fatalf("expected gemini-3.1-pro-high exact alias to stay unset when wildcard exists, got %q", got)
+	}
+	if got := mapping["gemini-3.1-pro-preview"]; got != "" {
+		t.Fatalf("expected gemini-3.1-pro-preview exact alias to stay unset when wildcard exists, got %q", got)
 	}
 }
 
