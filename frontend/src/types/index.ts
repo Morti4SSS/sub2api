@@ -874,7 +874,6 @@ export interface Account {
   auto_pause_on_expired: boolean
   created_at: string
   updated_at: string
-  token_refresh_state?: TokenRefreshState | null
   proxy?: Proxy
   group_ids?: number[] // Groups this account belongs to
   groups?: Group[] // Preloaded group objects
@@ -966,28 +965,6 @@ export interface AccountSchedulerGroupScore {
   sticky_weighted_enabled: boolean
 }
 
-export interface TokenRefreshState {
-  access_token_expires_at?: string | null
-  refresh_window_starts_at?: string | null
-  check_interval_seconds: number
-  refresh_before_seconds: number
-  last_attempt_at?: string | null
-  last_success_at?: string | null
-  last_error_at?: string | null
-  last_source?: string
-  last_result?: string
-  last_error?: string
-  access_token_status?: string
-  refresh_token_status?: string
-  risk_level?: string
-  background_last_checked_at?: string | null
-  background_last_success_at?: string | null
-  background_last_error_at?: string | null
-  background_last_error?: string
-  background_refresh_token_saved?: boolean | null
-  background_refresh_token_status?: string
-}
-
 // Account Usage types
 export interface WindowStats {
   requests: number
@@ -1062,121 +1039,6 @@ export interface AccountUsageInfo {
   error_code?: string
 
   error?: string            // usage 获取失败时的错误信息
-}
-
-export interface OpenAIFreePoolBinding {
-  group_id: number
-  proxy_id: number
-  label: string
-  sort_order: number
-}
-
-export interface OpenAIFreePoolConfig {
-  enabled: boolean
-  default_group_id: number
-  plus_group_id: number
-  lookahead_days: number
-  pools: OpenAIFreePoolBinding[]
-}
-
-export interface OpenAIFreePoolSummary {
-  managed_accounts: number
-  default_accounts: number
-  locked_accounts: number
-  unknown_reset_accounts: number
-  pending_moves: number
-}
-
-export interface OpenAIFreePoolState {
-  group_id: number
-  group_name: string
-  proxy_id: number
-  proxy_name: string
-  accounts: number
-  locked_accounts: number
-  unknown_reset_accounts: number
-}
-
-export interface OpenAIFreePoolMove {
-  account_id: number
-  account_name: string
-  current_group_id?: number
-  current_group_name?: string
-  target_group_id: number
-  target_group_name: string
-  current_proxy_id?: number
-  current_proxy_name?: string
-  target_proxy_id: number
-  target_proxy_name: string
-  reset_at?: string
-  reset_date: string
-  locked: boolean
-  reason: 'new_from_default' | 'invalid_lock' | 'invalid_mapping' | 'forced_rebalance' | string
-}
-
-export interface OpenAIFreePoolPreview {
-  config: OpenAIFreePoolConfig
-  summary: OpenAIFreePoolSummary
-  pools: OpenAIFreePoolState[]
-  moves: OpenAIFreePoolMove[]
-  unknown_reset_ids: number[]
-  generated_at: string
-  force_rebalance: boolean
-}
-
-export interface OpenAIFreePoolApplyResult {
-  applied: number
-  skipped: number
-  failed: number
-  preview?: OpenAIFreePoolPreview | null
-  generated_at: string
-}
-
-export type OpenAIFreePoolLockMode = 'auto' | 'manual' | 'unlocked'
-
-export interface OpenAIFreePoolManagedAccount {
-  account_id: number
-  account_name: string
-  current_group_id?: number
-  current_group_name?: string
-  current_proxy_id?: number
-  current_proxy_name?: string
-  reset_at?: string
-  in_default_group: boolean
-  lock_mode: OpenAIFreePoolLockMode
-  lock_group_id?: number
-  lock_group_name?: string
-  lock_proxy_id?: number
-  lock_proxy_name?: string
-}
-
-export interface OpenAIFreePoolLockRequest {
-  account_id: number
-  target_group_id: number
-}
-
-export interface OpenAIFreeResetForecastAccount {
-  account_id: number
-  account_name: string
-  group_id?: number
-  group_name?: string
-  proxy_id?: number
-  proxy_name?: string
-  in_default_group: boolean
-  usage_percent?: number
-  reset_at?: string
-}
-
-export interface OpenAIFreeResetForecastDay {
-  date: string
-  count: number
-  accounts: OpenAIFreeResetForecastAccount[]
-}
-
-export interface OpenAIFreeResetForecast {
-  days: OpenAIFreeResetForecastDay[]
-  unknown_count: number
-  generated_at: string
 }
 
 // OpenAI Codex usage snapshot (from response headers)

@@ -228,7 +228,6 @@ func registerDashboardRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	{
 		dashboard.GET("/snapshot-v2", h.Admin.Dashboard.GetSnapshotV2)
 		dashboard.GET("/stats", h.Admin.Dashboard.GetStats)
-		dashboard.GET("/openai-free-reset-forecast", h.Admin.Dashboard.GetOpenAIFreeResetForecast)
 		dashboard.GET("/realtime", h.Admin.Dashboard.GetRealtimeMetrics)
 		dashboard.GET("/trend", h.Admin.Dashboard.GetUsageTrend)
 		dashboard.GET("/models", h.Admin.Dashboard.GetModelStats)
@@ -296,13 +295,6 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	accounts := admin.Group("/accounts")
 	{
 		accounts.GET("", h.Admin.Account.List)
-		accounts.GET("/openai-free-pools/config", h.Admin.Account.GetOpenAIFreePoolConfig)
-		accounts.PUT("/openai-free-pools/config", h.Admin.Account.UpdateOpenAIFreePoolConfig)
-		accounts.GET("/openai-free-pools/preview", h.Admin.Account.PreviewOpenAIFreePool)
-		accounts.POST("/openai-free-pools/apply", h.Admin.Account.ApplyOpenAIFreePool)
-		accounts.GET("/openai-free-pools/accounts", h.Admin.Account.ListOpenAIFreePoolAccounts)
-		accounts.POST("/openai-free-pools/locks", h.Admin.Account.LockOpenAIFreePoolAccount)
-		accounts.DELETE("/openai-free-pools/locks/:accountId", h.Admin.Account.UnlockOpenAIFreePoolAccount)
 		accounts.GET("/:id", h.Admin.Account.GetByID)
 		accounts.POST("", h.Admin.Account.Create)
 		accounts.POST("/check-mixed-channel", h.Admin.Account.CheckMixedChannel)

@@ -175,36 +175,6 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 		c.Request = c.Request.WithContext(ctx)
 	}
 
-	probeCapture := inspectAnthropicDesktopProbeCapture(parsedReq)
-	if probeCapture.Observed {
-		reqLog.Info("gateway.claude_desktop_probe_capture",
-			zap.String("path", c.Request.URL.Path),
-			zap.String("model", probeCapture.Model),
-			zap.Int("max_tokens", probeCapture.MaxTokens),
-			zap.Int("messages_count", probeCapture.MessagesCount),
-			zap.String("first_role", probeCapture.FirstRole),
-			zap.Int("first_text_len", probeCapture.FirstTextLen),
-			zap.String("first_text_preview", anthropicDesktopProbeCapturePreview(probeCapture.FirstText)),
-		)
-		defer func() {
-			reqLog.Info("gateway.claude_desktop_probe_capture_result",
-				zap.String("path", c.Request.URL.Path),
-				zap.String("model", probeCapture.Model),
-				zap.Int("final_status", c.Writer.Status()),
-			)
-		}()
-	}
-	if shouldShortCircuitAnthropicDesktopProbe(probeCapture, reqStream) {
-		reqLog.Info("gateway.claude_desktop_probe_short_circuit",
-			zap.String("path", c.Request.URL.Path),
-			zap.String("model", probeCapture.Model),
-			zap.Int("max_tokens", probeCapture.MaxTokens),
-			zap.String("first_text_preview", anthropicDesktopProbeCapturePreview(probeCapture.FirstText)),
-		)
-		sendMockInterceptResponse(c, reqModel, InterceptTypeMaxTokensOneHaiku)
-		return
-	}
-
 	// 检查是否为 Claude Code 客户端，设置到 context 中（复用已解析请求，避免二次反序列化）。
 	SetClaudeCodeClientContext(c, body, parsedReq)
 	isClaudeCodeClient := service.IsClaudeCodeClient(c.Request.Context())
@@ -1033,14 +1003,6 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		platform = forcedPlatform
 	}
 
-	if platform == service.PlatformAnthropic || platform == "" {
-		catalog := h.gatewayService.GetClaudeCodeModelCatalog(c.Request.Context(), groupID, service.PlatformAnthropic)
-		if len(catalog) > 0 {
-			writeClaudeCodeCatalogModelsList(c, catalog)
-			return
-		}
-	}
-
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
@@ -1087,36 +1049,6 @@ func writeModelsList(c *gin.Context, modelIDs []string) {
 			DisplayName: modelID,
 			CreatedAt:   "2024-01-01T00:00:00Z",
 		})
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   models,
-	})
-}
-
-type claudeCodeModel struct {
-	ID           string         `json:"id"`
-	Type         string         `json:"type"`
-	DisplayName  string         `json:"display_name"`
-	CreatedAt    string         `json:"created_at"`
-	Capabilities []string       `json:"capabilities,omitempty"`
-	Metadata     map[string]any `json:"metadata,omitempty"`
-}
-
-func writeClaudeCodeCatalogModelsList(c *gin.Context, catalog []service.ClaudeCodeModelCatalogEntry) {
-	models := make([]claudeCodeModel, 0, len(catalog))
-	for _, entry := range catalog {
-		model := claudeCodeModel{
-			ID:           entry.RequestModel,
-			Type:         "model",
-			DisplayName:  entry.DisplayName,
-			CreatedAt:    "2024-01-01T00:00:00Z",
-			Capabilities: entry.Capabilities,
-		}
-		if entry.Supports1M {
-			model.Metadata = map[string]any{"context_window": 1000000}
-		}
-		models = append(models, model)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",

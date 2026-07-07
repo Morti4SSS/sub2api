@@ -6,7 +6,7 @@
 # Stage 3: Final minimal image
 # =============================================================================
 
-ARG NODE_IMAGE=node:20-alpine
+ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.26.4-alpine
 ARG ALPINE_IMAGE=alpine:3.21
 ARG POSTGRES_IMAGE=postgres:18-alpine
@@ -20,12 +20,11 @@ FROM ${NODE_IMAGE} AS frontend-builder
 
 WORKDIR /app/frontend
 
-# Install pnpm pinned to the lockfile-compatible major version used in CI.
-RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
+# Install pnpm (pinned to v9 to match CI and keep builds reproducible)
+RUN corepack enable && corepack prepare pnpm@9 --activate
 
-# Install dependency metadata first (better caching)
-# pnpm's frozen lockfile validation also depends on workspace and npm config.
-COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml frontend/.npmrc ./
+# Install dependencies first (better caching)
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 # Copy frontend source and build.

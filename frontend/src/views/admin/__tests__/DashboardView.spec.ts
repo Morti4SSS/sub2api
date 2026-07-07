@@ -4,11 +4,10 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { DashboardStats } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
-const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking, getOpenAIFreeResetForecast } = vi.hoisted(() => ({
+const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
   getSnapshotV2: vi.fn(),
   getUserUsageTrend: vi.fn(),
-  getUserSpendingRanking: vi.fn(),
-  getOpenAIFreeResetForecast: vi.fn()
+  getUserSpendingRanking: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -16,8 +15,7 @@ vi.mock('@/api/admin', () => ({
     dashboard: {
       getSnapshotV2,
       getUserUsageTrend,
-      getUserSpendingRanking,
-      getOpenAIFreeResetForecast
+      getUserSpendingRanking
     }
   }
 }))
@@ -73,7 +71,6 @@ const createDashboardStats = (): DashboardStats => ({
   total_tokens: 0,
   total_cost: 0,
   total_actual_cost: 0,
-  total_account_cost: 0,
   today_requests: 0,
   today_input_tokens: 0,
   today_output_tokens: 0,
@@ -82,7 +79,6 @@ const createDashboardStats = (): DashboardStats => ({
   today_tokens: 0,
   today_cost: 0,
   today_actual_cost: 0,
-  today_account_cost: 0,
   average_duration_ms: 0,
   uptime: 0,
   rpm: 0,
@@ -94,7 +90,6 @@ describe('admin DashboardView', () => {
     getSnapshotV2.mockReset()
     getUserUsageTrend.mockReset()
     getUserSpendingRanking.mockReset()
-    getOpenAIFreeResetForecast.mockReset()
 
     getSnapshotV2.mockResolvedValue({
       stats: createDashboardStats(),
@@ -115,27 +110,6 @@ describe('admin DashboardView', () => {
       start_date: '',
       end_date: ''
     })
-    getOpenAIFreeResetForecast.mockResolvedValue({
-      days: [
-        {
-          date: '2026-05-23',
-          count: 2,
-          accounts: [
-            {
-              account_id: 1,
-              account_name: 'free-peru',
-              group_name: 'free-1',
-              proxy_name: 'proxy-1',
-              in_default_group: false,
-              usage_percent: 73,
-              reset_at: '2026-05-23T10:00:00Z'
-            }
-          ]
-        }
-      ],
-      unknown_count: 1,
-      generated_at: '2026-05-22T00:00:00Z'
-    })
   })
 
   it('uses last 24 hours as default dashboard range', async () => {
@@ -149,7 +123,6 @@ describe('admin DashboardView', () => {
           Select: true,
           ModelDistributionChart: true,
           TokenUsageTrend: true,
-          Bar: true,
           Line: true
         }
       }
@@ -166,28 +139,5 @@ describe('admin DashboardView', () => {
       end_date: formatLocalDate(now),
       granularity: 'hour'
     }))
-  })
-
-  it('loads and expands OpenAI free reset forecast', async () => {
-    const wrapper = mount(DashboardView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          LoadingSpinner: true,
-          Icon: true,
-          DateRangePicker: true,
-          Select: true,
-          ModelDistributionChart: true,
-          TokenUsageTrend: true,
-          Bar: true,
-          Line: true
-        }
-      }
-    })
-
-    await flushPromises()
-
-    expect(getOpenAIFreeResetForecast).toHaveBeenCalledTimes(1)
-    expect(wrapper.text()).toContain('admin.dashboard.openaiFreeResetForecast.unknownCount')
   })
 })

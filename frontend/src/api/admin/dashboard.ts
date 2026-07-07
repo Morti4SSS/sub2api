@@ -13,7 +13,6 @@ import type {
   UserUsageTrendPoint,
   UserSpendingRankingResponse,
   UserBreakdownItem,
-  OpenAIFreeResetForecast,
   UsageRequestType
 } from '@/types'
 
@@ -323,11 +322,6 @@ export async function getBatchApiKeysUsage(
   return data
 }
 
-export async function getOpenAIFreeResetForecast(): Promise<OpenAIFreeResetForecast> {
-  const { data } = await apiClient.get<OpenAIFreeResetForecast>('/admin/dashboard/openai-free-reset-forecast')
-  return data
-}
-
 export const dashboardAPI = {
   getStats,
   getRealtimeMetrics,
@@ -339,8 +333,7 @@ export const dashboardAPI = {
   getUserUsageTrend,
   getUserSpendingRanking,
   getBatchUsersUsage,
-  getBatchApiKeysUsage,
-  getOpenAIFreeResetForecast
+  getBatchApiKeysUsage
 }
 
 export default dashboardAPI

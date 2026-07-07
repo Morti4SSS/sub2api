@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -49,7 +48,6 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 // AccountHandler handles admin account management
 type AccountHandler struct {
 	adminService            service.AdminService
-	openAIFreePoolService   *service.OpenAIFreePoolService
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	geminiOAuthService      *service.GeminiOAuthService
@@ -62,7 +60,6 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
-	tokenRefreshConfig      *config.TokenRefreshConfig
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -80,12 +77,7 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
-	cfg ...*config.Config,
 ) *AccountHandler {
-	var tokenRefreshConfig *config.TokenRefreshConfig
-	if len(cfg) > 0 && cfg[0] != nil {
-		tokenRefreshConfig = &cfg[0].TokenRefresh
-	}
 	return &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
@@ -100,58 +92,7 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
-		tokenRefreshConfig:      tokenRefreshConfig,
 	}
-}
-
-func (h *AccountHandler) SetOpenAIFreePoolService(openAIFreePoolService *service.OpenAIFreePoolService) {
-	h.openAIFreePoolService = openAIFreePoolService
-}
-
-func (h *AccountHandler) SetTokenRefreshConfig(cfg *config.TokenRefreshConfig) {
-	h.tokenRefreshConfig = cfg
-}
-
-type OpenAIFreePoolConfigRequest struct {
-	Enabled        bool                     `json:"enabled"`
-	DefaultGroupID int64                    `json:"default_group_id"`
-	PlusGroupID    int64                    `json:"plus_group_id"`
-	LookaheadDays  int                      `json:"lookahead_days"`
-	Pools          []service.OpenAIFreePool `json:"pools"`
-}
-
-type OpenAIFreePoolApplyRequest struct {
-	ForceRebalance bool `json:"force_rebalance"`
-}
-
-type OpenAIFreePoolLockRequest struct {
-	AccountID     int64 `json:"account_id" binding:"required"`
-	TargetGroupID int64 `json:"target_group_id" binding:"required"`
-}
-
-func isNonRetryableManualRefreshError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	needles := []string{
-		"invalid_grant",
-		"invalid_client",
-		"unauthorized_client",
-		"access_denied",
-		"refresh_token_invalidated",
-		"refresh_token_reused",
-		"token_invalidated",
-		"status 401",
-		"missing_project_id",
-		"no refresh token available",
-	}
-	for _, needle := range needles {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 // CreateAccountRequest represents create account request
@@ -255,27 +196,11 @@ type AccountSchedulerGroupScore struct {
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
-const (
-	defaultBatchRefreshConcurrency = 10
-	maxBatchRefreshConcurrency     = 10
-)
-
-func normalizeBatchRefreshConcurrency(value int) int {
-	if value <= 0 {
-		return defaultBatchRefreshConcurrency
-	}
-	if value > maxBatchRefreshConcurrency {
-		return maxBatchRefreshConcurrency
-	}
-	return value
-}
-
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	item := AccountWithConcurrency{
 		Account:            dto.AccountFromService(account),
 		CurrentConcurrency: 0,
 	}
-	item.TokenRefreshState = h.buildTokenRefreshState(account)
 	if account == nil {
 		return item
 	}
@@ -692,7 +617,6 @@ func (h *AccountHandler) List(c *gin.Context) {
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
 		}
-		item.TokenRefreshState = h.buildTokenRefreshState(acc)
 
 		// 添加窗口费用（仅当启用时）
 		if windowCosts != nil {
@@ -731,346 +655,6 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 
 	response.Paginated(c, result, total, page, pageSize)
-}
-
-func (h *AccountHandler) GetOpenAIFreePoolConfig(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	cfg, err := h.openAIFreePoolService.GetConfig(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, cfg)
-}
-
-func (h *AccountHandler) UpdateOpenAIFreePoolConfig(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	var req OpenAIFreePoolConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	cfg, err := h.openAIFreePoolService.UpdateConfig(c.Request.Context(), &service.OpenAIFreePoolConfig{
-		Enabled:        req.Enabled,
-		DefaultGroupID: req.DefaultGroupID,
-		PlusGroupID:    req.PlusGroupID,
-		LookaheadDays:  req.LookaheadDays,
-		Pools:          req.Pools,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, cfg)
-}
-
-func (h *AccountHandler) PreviewOpenAIFreePool(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	forceRebalance := parseBoolQueryWithDefault(c.Query("force_rebalance"), false)
-	preview, err := h.openAIFreePoolService.Preview(c.Request.Context(), forceRebalance)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, preview)
-}
-
-func (h *AccountHandler) ApplyOpenAIFreePool(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	var req OpenAIFreePoolApplyRequest
-	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	result, err := h.openAIFreePoolService.Apply(c.Request.Context(), service.OpenAIFreePoolApplyRequest{
-		ForceRebalance: req.ForceRebalance,
-	})
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-func (h *AccountHandler) ListOpenAIFreePoolAccounts(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	accounts, err := h.openAIFreePoolService.ListManagedAccounts(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, accounts)
-}
-
-func (h *AccountHandler) LockOpenAIFreePoolAccount(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	var req OpenAIFreePoolLockRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	if err := h.openAIFreePoolService.LockAccount(c.Request.Context(), req.AccountID, req.TargetGroupID); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, gin.H{"message": "OpenAI free pool lock updated"})
-}
-
-func (h *AccountHandler) UnlockOpenAIFreePoolAccount(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	accountID, err := strconv.ParseInt(c.Param("accountId"), 10, 64)
-	if err != nil {
-		response.BadRequest(c, "Invalid account ID")
-		return
-	}
-	if err := h.openAIFreePoolService.UnlockAccount(c.Request.Context(), accountID); err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, gin.H{"message": "OpenAI free pool lock cleared"})
-}
-
-func (h *AccountHandler) buildTokenRefreshState(account *service.Account) *dto.TokenRefreshState {
-	if account == nil || account.Type != service.AccountTypeOAuth {
-		return nil
-	}
-
-	checkInterval := 5 * time.Minute
-	refreshBefore := 12 * time.Hour
-	if h.tokenRefreshConfig != nil {
-		if h.tokenRefreshConfig.CheckIntervalMinutes > 0 {
-			checkInterval = time.Duration(h.tokenRefreshConfig.CheckIntervalMinutes) * time.Minute
-		}
-		if h.tokenRefreshConfig.RefreshBeforeExpiryHours > 0 {
-			refreshBefore = time.Duration(h.tokenRefreshConfig.RefreshBeforeExpiryHours * float64(time.Hour))
-		}
-	}
-	if checkInterval < time.Minute {
-		checkInterval = 5 * time.Minute
-	}
-
-	state := &dto.TokenRefreshState{
-		CheckIntervalSeconds:         int64(checkInterval.Seconds()),
-		RefreshBeforeSeconds:         int64(refreshBefore.Seconds()),
-		LastAttemptAt:                credentialTime(account, "_token_refresh_last_attempt_at"),
-		LastSuccessAt:                credentialTime(account, "_token_refresh_last_success_at"),
-		LastErrorAt:                  credentialTime(account, "_token_refresh_last_error_at"),
-		LastSource:                   account.GetCredential("_token_refresh_last_source"),
-		LastResult:                   account.GetCredential("_token_refresh_last_result"),
-		LastError:                    account.GetCredential("_token_refresh_last_error"),
-		AccessTokenStatus:            account.GetCredential("_token_refresh_at_status"),
-		RefreshTokenStatus:           account.GetCredential("_token_refresh_rt_status"),
-		BackgroundLastCheckedAt:      credentialTime(account, "_token_refresh_background_last_checked_at"),
-		BackgroundLastSuccessAt:      credentialTime(account, "_token_refresh_background_last_success_at"),
-		BackgroundLastErrorAt:        credentialTime(account, "_token_refresh_background_last_error_at"),
-		BackgroundLastError:          account.GetCredential("_token_refresh_background_last_error"),
-		BackgroundRefreshTokenStatus: account.GetCredential("_token_refresh_background_rt_status"),
-	}
-	if saved, ok := credentialBool(account, "_token_refresh_background_rt_saved"); ok {
-		state.BackgroundRefreshTokenSaved = &saved
-	}
-	if h.tokenRefreshConfig == nil {
-		if seconds := account.GetCredentialAsInt64("_token_refresh_background_refresh_before_seconds"); seconds > 0 {
-			state.RefreshBeforeSeconds = seconds
-		}
-		if seconds := account.GetCredentialAsInt64("_token_refresh_refresh_before_seconds"); seconds > 0 {
-			state.RefreshBeforeSeconds = seconds
-		}
-		if seconds := account.GetCredentialAsInt64("_token_refresh_check_interval_seconds"); seconds > 0 {
-			state.CheckIntervalSeconds = seconds
-		}
-		if seconds := account.GetCredentialAsInt64("_token_refresh_background_check_interval_seconds"); seconds > 0 {
-			state.CheckIntervalSeconds = seconds
-		}
-	}
-	if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
-		state.AccessTokenExpiresAt = expiresAt
-		windowStart := expiresAt.Add(-time.Duration(state.RefreshBeforeSeconds) * time.Second)
-		state.RefreshWindowStartsAt = &windowStart
-	}
-	state.RiskLevel = tokenRefreshRiskLevel(account, state)
-	return state
-}
-
-func tokenRefreshRiskLevel(account *service.Account, state *dto.TokenRefreshState) string {
-	if account == nil || state == nil {
-		return ""
-	}
-	if state.LastResult == "failed" || state.LastResult == "save_failed" || state.BackgroundLastError != "" {
-		return "failed"
-	}
-	if state.LastResult == "" && state.RefreshTokenStatus == "" && state.BackgroundRefreshTokenStatus == "" {
-		return "unknown"
-	}
-	rtStatus := strings.TrimSpace(state.RefreshTokenStatus)
-	if rtStatus == "" {
-		rtStatus = strings.TrimSpace(state.BackgroundRefreshTokenStatus)
-	}
-	if rtStatus == "" {
-		return "unknown"
-	}
-	if rtStatus == "rotated" || rtStatus == "saved_no_previous" {
-		return "ok"
-	}
-	if rtStatus == "missing_after_refresh" || rtStatus == "save_failed" {
-		return "high_risk"
-	}
-	if rtStatus == "unchanged" || rtStatus == "response_missing_preserved_old" {
-		if account.Platform == service.PlatformOpenAI || account.Platform == service.PlatformAnthropic {
-			return "high_risk"
-		}
-		return "watch"
-	}
-	return "unknown"
-}
-
-func credentialTime(account *service.Account, key string) *time.Time {
-	if account == nil {
-		return nil
-	}
-	value := strings.TrimSpace(account.GetCredential(key))
-	if value == "" {
-		return nil
-	}
-	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
-		return &parsed
-	}
-	return account.GetCredentialAsTime(key)
-}
-
-func credentialBool(account *service.Account, key string) (bool, bool) {
-	if account == nil || account.Credentials == nil {
-		return false, false
-	}
-	raw, ok := account.Credentials[key]
-	if !ok || raw == nil {
-		return false, false
-	}
-	switch v := raw.(type) {
-	case bool:
-		return v, true
-	case string:
-		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
-		return parsed, err == nil
-	default:
-		return false, false
-	}
-}
-
-func firstNonEmptyTokenRefreshSource(values []string, fallback string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return fallback
-}
-
-func annotateManualTokenRefresh(credentials map[string]any, oldAccount *service.Account, source, result string, refreshErr error) {
-	if credentials == nil {
-		return
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	source = strings.TrimSpace(source)
-	if source == "" {
-		source = "manual_single"
-	}
-	credentials["_token_refresh_last_source"] = source
-	credentials["_token_refresh_last_attempt_at"] = now
-	credentials["_token_refresh_last_checked_at"] = now
-	credentials["_token_refresh_last_result"] = result
-	credentials["_token_refresh_at_status"] = classifyTokenRefreshAccessTokenStatus(oldAccount, credentials, result)
-	savedRT, rtStatus := classifyTokenRefreshRefreshTokenStatus(oldAccount, credentials, result)
-	credentials["_token_refresh_rt_saved"] = savedRT
-	credentials["_token_refresh_rt_status"] = rtStatus
-	if result == "success" {
-		credentials["_token_refresh_last_success_at"] = now
-		credentials["_token_refresh_last_error_at"] = ""
-		credentials["_token_refresh_last_error"] = ""
-		return
-	}
-	if refreshErr != nil {
-		credentials["_token_refresh_last_error_at"] = now
-		credentials["_token_refresh_last_error"] = refreshErr.Error()
-	}
-}
-
-func (h *AccountHandler) recordManualTokenRefreshFailure(ctx context.Context, account *service.Account, source string, refreshErr error) {
-	if h == nil || account == nil || refreshErr == nil {
-		return
-	}
-	credentials := make(map[string]any, len(account.Credentials)+8)
-	for k, v := range account.Credentials {
-		credentials[k] = v
-	}
-	annotateManualTokenRefresh(credentials, account, source, "failed", refreshErr)
-	if _, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{Credentials: credentials}); err != nil {
-		slog.Warn("account.record_manual_token_refresh_failure_failed",
-			"account_id", account.ID,
-			"error", err,
-		)
-	}
-}
-
-func classifyTokenRefreshAccessTokenStatus(oldAccount *service.Account, credentials map[string]any, result string) string {
-	if result != "success" {
-		return "failed"
-	}
-	before := ""
-	if oldAccount != nil {
-		before = oldAccount.GetCredential("expires_at")
-	}
-	after := (&service.Account{Credentials: credentials}).GetCredential("expires_at")
-	switch {
-	case after == "":
-		return "missing_after_refresh"
-	case before != "" && before != after:
-		return "refreshed"
-	default:
-		return "unchanged"
-	}
-}
-
-func classifyTokenRefreshRefreshTokenStatus(oldAccount *service.Account, credentials map[string]any, result string) (bool, string) {
-	if result != "success" {
-		return false, "failed"
-	}
-	oldRT := ""
-	if oldAccount != nil {
-		oldRT = oldAccount.GetCredential("refresh_token")
-	}
-	newRT := (&service.Account{Credentials: credentials}).GetCredential("refresh_token")
-	switch {
-	case newRT == "":
-		return false, "missing_after_refresh"
-	case oldRT == "":
-		return true, "saved_no_previous"
-	case oldRT != newRT:
-		return true, "rotated"
-	default:
-		return true, "unchanged"
-	}
 }
 
 func buildAccountsListETag(
@@ -1508,7 +1092,7 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
-func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account, source ...string) (*service.Account, string, error) {
+func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
@@ -1520,27 +1104,10 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	}
 
 	var newCredentials map[string]any
-	refreshSource := firstNonEmptyTokenRefreshSource(source, "manual_single")
 
 	if account.IsOpenAI() {
-		if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
-			err := infraerrors.BadRequest("OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
-			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
-			if setErr := h.adminService.SetAccountError(ctx, account.ID, errorMsg); setErr != nil {
-				log.Printf("[WARN] failed to set account %d error after manual refresh failure: %v", account.ID, setErr)
-			}
-			h.adminService.EnsureOpenAIPrivacy(ctx, account)
-			return nil, "", err
-		}
 		tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
-			if isNonRetryableManualRefreshError(err) {
-				errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
-				if setErr := h.adminService.SetAccountError(ctx, account.ID, errorMsg); setErr != nil {
-					log.Printf("[WARN] failed to set account %d error after manual refresh failure: %v", account.ID, setErr)
-				}
-			}
-			h.recordManualTokenRefreshFailure(ctx, account, refreshSource, err)
 			// 刷新失败但 access_token 可能仍有效，尝试设置隐私
 			h.adminService.EnsureOpenAIPrivacy(ctx, account)
 			return nil, "", err
@@ -1556,13 +1123,6 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	} else if account.Platform == service.PlatformGemini {
 		tokenInfo, err := h.geminiOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
-			if isNonRetryableManualRefreshError(err) {
-				errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
-				if setErr := h.adminService.SetAccountError(ctx, account.ID, errorMsg); setErr != nil {
-					log.Printf("[WARN] failed to set account %d error after manual refresh failure: %v", account.ID, setErr)
-				}
-			}
-			h.recordManualTokenRefreshFailure(ctx, account, refreshSource, err)
 			return nil, "", fmt.Errorf("failed to refresh credentials: %w", err)
 		}
 
@@ -1575,13 +1135,6 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	} else if account.Platform == service.PlatformAntigravity {
 		tokenInfo, err := h.antigravityOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
-			if isNonRetryableManualRefreshError(err) {
-				errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
-				if setErr := h.adminService.SetAccountError(ctx, account.ID, errorMsg); setErr != nil {
-					log.Printf("[WARN] failed to set account %d error after manual refresh failure: %v", account.ID, setErr)
-				}
-			}
-			h.recordManualTokenRefreshFailure(ctx, account, refreshSource, err)
 			return nil, "", err
 		}
 
@@ -1622,13 +1175,6 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		// Use Anthropic/Claude OAuth service to refresh token
 		tokenInfo, err := h.oauthService.RefreshAccountToken(ctx, account)
 		if err != nil {
-			if isNonRetryableManualRefreshError(err) {
-				errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
-				if setErr := h.adminService.SetAccountError(ctx, account.ID, errorMsg); setErr != nil {
-					log.Printf("[WARN] failed to set account %d error after manual refresh failure: %v", account.ID, setErr)
-				}
-			}
-			h.recordManualTokenRefreshFailure(ctx, account, refreshSource, err)
 			return nil, "", err
 		}
 
@@ -1650,8 +1196,6 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 			newCredentials["scope"] = tokenInfo.Scope
 		}
 	}
-
-	annotateManualTokenRefresh(newCredentials, account, refreshSource, "success", nil)
 
 	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
 		Credentials: newCredentials,
@@ -1798,6 +1342,7 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 			)
 		}
 	}
+
 	response.Success(c, h.buildAccountResponseWithRuntime(ctx, updatedAccount))
 }
 
@@ -1945,8 +1490,7 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 // POST /api/v1/admin/accounts/batch-refresh
 func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 	var req struct {
-		AccountIDs  []int64 `json:"account_ids"`
-		Concurrency int     `json:"concurrency"`
+		AccountIDs []int64 `json:"account_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -1973,7 +1517,7 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 		}
 	}
 
-	maxConcurrency := normalizeBatchRefreshConcurrency(req.Concurrency)
+	const maxConcurrency = 10
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxConcurrency)
 
@@ -2000,7 +1544,7 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 			continue
 		}
 		g.Go(func() error {
-			_, warning, err := h.refreshSingleAccount(gctx, acc, "manual_batch")
+			_, warning, err := h.refreshSingleAccount(gctx, acc)
 			mu.Lock()
 			if err != nil {
 				failedCount++
@@ -2028,12 +1572,11 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"total":       len(req.AccountIDs),
-		"success":     successCount,
-		"failed":      failedCount,
-		"concurrency": maxConcurrency,
-		"errors":      errors,
-		"warnings":    warnings,
+		"total":    len(req.AccountIDs),
+		"success":  successCount,
+		"failed":   failedCount,
+		"errors":   errors,
+		"warnings": warnings,
 	})
 }
 
@@ -2234,6 +1777,7 @@ func (h *AccountHandler) BatchUpdateCredentials(c *gin.Context) {
 			"success":    true,
 		})
 	}
+
 	response.Success(c, gin.H{
 		"success":     success,
 		"failed":      failed,
@@ -2316,6 +1860,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+
 	response.Success(c, result)
 }
 

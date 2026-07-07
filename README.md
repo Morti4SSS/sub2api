@@ -25,33 +25,6 @@ Please read the following carefully before using this project:
 - **📖 Disclaimer**: This project is provided for technical learning and research purposes only. The authors assume no liability for account bans, service interruptions, data loss, or any other direct or indirect damages resulting from the use of this project.
 - **🚫 No Commercial Authorization**: The developers of this project have never authorized any individual or organization to conduct any form of commercial operation based on this project. Any commercial activity conducted in the name of or based on this project is unrelated to this project and its developers, and all resulting disputes, losses, and legal liabilities shall be borne solely by the party conducting such activity.
 
-### Admin OpenAI Free Pooling
-
-The admin dashboard, account table, and dedicated `OpenAI Free 分池` admin page include an OpenAI free pooling workflow intended for source-level deployment customization:
-
-- Scope: only `platform=openai` accounts with `credentials.plan_type=free`
-- Config: one `default` intake group, one excluded `plus` group, and exactly five `{group, proxy}` pool bindings
-- Preview/apply: the dedicated admin page auto-loads a preview, supports manual apply, and default behavior only moves new free accounts that are still in the configured `default` group; target pools are chosen by clustering accounts with the same `codex_7d_reset_at` day into the same free pool whenever possible, while existing stable accounts stay in place unless force rebalance is explicitly enabled
-- Locks: operators can manually lock a managed OpenAI free account to one of the configured five free pools; the bound proxy follows the selected pool automatically, and unlocking only removes the manual override without forcing an immediate move
-- Forecast: the dashboard card aggregates upcoming resets from `extra.codex_7d_reset_at`, renders them as a line chart with expandable day details, and keeps accounts without that field in `Unknown`
-- Status feedback: when an admin account test returns an OAuth-style `401` / `token_invalidated` failure, the frontend immediately re-fetches that account and switches the badge to the persisted `error` state if the backend has already marked it; manual `Refresh Token` now also shows explicit success/failure toast feedback and re-syncs the row after a failure so persisted `error` status becomes visible without waiting for the next list poll
-
-### OpenAI Free Reset-Aware Scheduling
-
-For the runtime request path, Sub2API can now prefer the OpenAI free account that will reset sooner, but only inside the group whose name is exactly `账号池`.
-
-- Activation scope: only `platform=openai` accounts with `credentials.plan_type=free` and a valid RFC3339 `extra.codex_7d_reset_at`
-- Pre-filtering: accounts that are already unschedulable, including accounts still inside a `rate_limit_reset_at` cooldown window, are filtered out before ordering
-- Ordering rule: after filtering, selection keeps the existing scheduler layers and inserts reset awareness as an additional tie-breaker. In load-aware paths this becomes `priority -> load rate -> earlier OpenAI free reset -> last used / same-layer shuffle`; in fallback random mode it keeps `priority -> earlier OpenAI free reset` and only randomizes within the same layer
-- Boundaries: this rule does not reshuffle other groups, does not override `priority`, and does not apply to non-free or non-OpenAI accounts
-
-Current boundaries:
-
-- First version is manual preview/apply only; there is no background scheduled execution
-- Background token refresh is not a full account health inspection; accounts that are not used, not manually tested, and not manually refreshed may still remain visually `active` until some real refresh/test path touches them
-- The runtime reset-aware scheduling described above is intentionally narrow: it only changes how already-eligible accounts are ordered inside the `账号池` group, and it depends on correct `plan_type` plus `codex_7d_reset_at` metadata
-- Source-code tests can validate planner logic, API contracts, and UI rendering, but they do not prove production mappings, live account metadata completeness, or zero-impact behavior on an already running deployment
-
 ## ❤️ Sponsors
 
 > [Want to appear here?](mailto:support@sub2api.org)

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
@@ -8,20 +7,12 @@ const {
   listAccounts,
   listWithEtag,
   getBatchTodayStats,
-  getById,
-  refreshCredentials,
-  lockOpenAIFreePoolAccount,
-  unlockOpenAIFreePoolAccount,
   getAllProxies,
   getAllGroups
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
-  getById: vi.fn(),
-  refreshCredentials: vi.fn(),
-  lockOpenAIFreePoolAccount: vi.fn(),
-  unlockOpenAIFreePoolAccount: vi.fn(),
   getAllProxies: vi.fn(),
   getAllGroups: vi.fn()
 }))
@@ -32,15 +23,10 @@ vi.mock('@/api/admin', () => ({
       list: listAccounts,
       listWithEtag,
       getBatchTodayStats,
-      getById,
-      refreshCredentials,
-      lockOpenAIFreePoolAccount,
-      unlockOpenAIFreePoolAccount,
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
-      toggleSchedulable: vi.fn(),
-      setSchedulable: vi.fn()
+      toggleSchedulable: vi.fn()
     },
     proxies: {
       getAll: getAllProxies
@@ -51,17 +37,11 @@ vi.mock('@/api/admin', () => ({
   }
 }))
 
-const { showError, showSuccess, showInfo } = vi.hoisted(() => ({
-  showError: vi.fn(),
-  showSuccess: vi.fn(),
-  showInfo: vi.fn()
-}))
-
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError,
-    showSuccess,
-    showInfo
+    showError: vi.fn(),
+    showSuccess: vi.fn(),
+    showInfo: vi.fn()
   })
 }))
 
@@ -111,15 +91,8 @@ describe('admin AccountsView bulk edit scope', () => {
     listAccounts.mockReset()
     listWithEtag.mockReset()
     getBatchTodayStats.mockReset()
-    getById.mockReset()
-    refreshCredentials.mockReset()
-    lockOpenAIFreePoolAccount.mockReset()
-    unlockOpenAIFreePoolAccount.mockReset()
     getAllProxies.mockReset()
     getAllGroups.mockReset()
-    showError.mockReset()
-    showSuccess.mockReset()
-    showInfo.mockReset()
 
     listAccounts.mockResolvedValue({
       items: [],
@@ -134,31 +107,6 @@ describe('admin AccountsView bulk edit scope', () => {
       data: null
     })
     getBatchTodayStats.mockResolvedValue({ stats: {} })
-    getById.mockResolvedValue({
-      id: 7,
-      name: 'OpenAI OAuth',
-      platform: 'openai',
-      type: 'oauth',
-      status: 'error',
-      schedulable: true,
-      current_concurrency: 0,
-      current_window_cost: 0,
-      active_sessions: 0,
-      error_message: 'Token refresh failed (non-retryable): invalid_grant'
-    })
-    refreshCredentials.mockResolvedValue({
-      id: 7,
-      name: 'OpenAI OAuth',
-      platform: 'openai',
-      type: 'oauth',
-      status: 'active',
-      schedulable: true,
-      current_concurrency: 0,
-      current_window_cost: 0,
-      active_sessions: 0
-    })
-    lockOpenAIFreePoolAccount.mockResolvedValue({ message: 'ok' })
-    unlockOpenAIFreePoolAccount.mockResolvedValue({ message: 'ok' })
     getAllProxies.mockResolvedValue([])
     getAllGroups.mockResolvedValue([])
   })
@@ -207,175 +155,6 @@ describe('admin AccountsView bulk edit scope', () => {
 
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-show')).toBe('true')
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-target-mode')).toBe('filtered')
-  })
-
-  it('syncs testing account when AccountTestModal emits account-status-updated', async () => {
-    listAccounts.mockResolvedValue({
-      items: [{
-        id: 7,
-        name: 'OpenAI OAuth',
-        platform: 'openai',
-        type: 'oauth',
-        status: 'active',
-        schedulable: true,
-        current_concurrency: 0,
-        current_window_cost: 0,
-        active_sessions: 0
-      }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1
-    })
-
-    const AccountTestModalStub = defineComponent({
-      props: ['show', 'account'],
-      emits: ['close', 'account-status-updated'],
-      template: '<div data-test="account-test-modal"></div>'
-    })
-
-    const wrapper = mount(AccountsView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          TablePageLayout: {
-            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
-          },
-          DataTable: DataTableStub,
-          Pagination: true,
-          ConfirmDialog: true,
-          AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
-          AccountTableFilters: { template: '<div></div>' },
-          AccountBulkActionsBar: AccountBulkActionsBarStub,
-          AccountActionMenu: true,
-          ImportDataModal: true,
-          ReAuthAccountModal: true,
-          AccountTestModal: AccountTestModalStub,
-          AccountStatsModal: true,
-          ScheduledTestsPanel: true,
-          SyncFromCrsModal: true,
-          TempUnschedStatusModal: true,
-          ErrorPassthroughRulesModal: true,
-          TLSFingerprintProfilesModal: true,
-          CreateAccountModal: true,
-          EditAccountModal: true,
-          BulkEditAccountModal: BulkEditAccountModalStub,
-          PlatformTypeBadge: true,
-          AccountCapacityCell: true,
-          AccountStatusIndicator: true,
-          AccountTodayStatsCell: true,
-          AccountGroupsCell: true,
-          AccountUsageCell: true,
-          Icon: true
-        }
-      }
-    })
-
-    await flushPromises()
-    ;(wrapper.vm as any).testingAcc = {
-      id: 7,
-      name: 'OpenAI OAuth',
-      platform: 'openai',
-      type: 'oauth',
-      status: 'active',
-      schedulable: true,
-      current_concurrency: 0,
-      current_window_cost: 0,
-      active_sessions: 0
-    }
-    ;(wrapper.vm as any).showTest = true
-    await flushPromises()
-
-    wrapper.getComponent(AccountTestModalStub).vm.$emit('account-status-updated', {
-      id: 7,
-      name: 'OpenAI OAuth',
-      platform: 'openai',
-      type: 'oauth',
-      status: 'error',
-      schedulable: true,
-      current_concurrency: 0,
-      current_window_cost: 0,
-      active_sessions: 0,
-      error_message: 'Authentication failed (401)'
-    })
-    await flushPromises()
-
-    expect((wrapper.vm as any).testingAcc.status).toBe('error')
-    expect((wrapper.vm as any).accounts[0].status).toBe('error')
-  })
-
-  it('shows success toast after single account refresh', async () => {
-    listAccounts.mockResolvedValue({
-      items: [{
-        id: 7,
-        name: 'OpenAI OAuth',
-        platform: 'openai',
-        type: 'oauth',
-        status: 'active',
-        schedulable: true,
-        current_concurrency: 0,
-        current_window_cost: 0,
-        active_sessions: 0
-      }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1
-    })
-
-    const wrapper = mount(AccountsView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          TablePageLayout: {
-            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
-          },
-          DataTable: DataTableStub,
-          Pagination: true,
-          ConfirmDialog: true,
-          AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
-          AccountTableFilters: { template: '<div></div>' },
-          AccountBulkActionsBar: AccountBulkActionsBarStub,
-          AccountActionMenu: true,
-          ImportDataModal: true,
-          ReAuthAccountModal: true,
-          AccountTestModal: true,
-          AccountStatsModal: true,
-          ScheduledTestsPanel: true,
-          SyncFromCrsModal: true,
-          TempUnschedStatusModal: true,
-          ErrorPassthroughRulesModal: true,
-          TLSFingerprintProfilesModal: true,
-          CreateAccountModal: true,
-          EditAccountModal: true,
-          BulkEditAccountModal: BulkEditAccountModalStub,
-          PlatformTypeBadge: true,
-          AccountCapacityCell: true,
-          AccountStatusIndicator: true,
-          AccountTodayStatsCell: true,
-          AccountGroupsCell: true,
-          AccountUsageCell: true,
-          Icon: true
-        }
-      }
-    })
-
-    await flushPromises()
-    await (wrapper.vm as any).handleRefresh({
-      id: 7,
-      name: 'OpenAI OAuth',
-      platform: 'openai',
-      type: 'oauth',
-      status: 'active',
-      schedulable: true,
-      current_concurrency: 0,
-      current_window_cost: 0,
-      active_sessions: 0
-    })
-    await flushPromises()
-
-    expect(refreshCredentials).toHaveBeenCalledWith(7)
-    expect(showSuccess).toHaveBeenCalled()
   })
 
   it('renders the created_at column by default', async () => {
@@ -444,88 +223,5 @@ describe('admin AccountsView bulk edit scope', () => {
       label: 'admin.accounts.columns.createdAt',
       sortable: true
     })
-  })
-
-  it('syncs latest account state after single account refresh fails', async () => {
-    listAccounts.mockResolvedValue({
-      items: [{
-        id: 7,
-        name: 'OpenAI OAuth',
-        platform: 'openai',
-        type: 'oauth',
-        status: 'active',
-        schedulable: true,
-        current_concurrency: 0,
-        current_window_cost: 0,
-        active_sessions: 0
-      }],
-      total: 1,
-      page: 1,
-      page_size: 20,
-      pages: 1
-    })
-    refreshCredentials.mockRejectedValue({
-      response: {
-        data: {
-          message: 'invalid_grant: token revoked'
-        }
-      }
-    })
-
-    const wrapper = mount(AccountsView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          TablePageLayout: {
-            template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>'
-          },
-          DataTable: DataTableStub,
-          Pagination: true,
-          ConfirmDialog: true,
-          AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
-          AccountTableFilters: { template: '<div></div>' },
-          AccountBulkActionsBar: AccountBulkActionsBarStub,
-          AccountActionMenu: true,
-          ImportDataModal: true,
-          ReAuthAccountModal: true,
-          AccountTestModal: true,
-          AccountStatsModal: true,
-          ScheduledTestsPanel: true,
-          SyncFromCrsModal: true,
-          TempUnschedStatusModal: true,
-          ErrorPassthroughRulesModal: true,
-          TLSFingerprintProfilesModal: true,
-          CreateAccountModal: true,
-          EditAccountModal: true,
-          BulkEditAccountModal: BulkEditAccountModalStub,
-          PlatformTypeBadge: true,
-          AccountCapacityCell: true,
-          AccountStatusIndicator: true,
-          AccountTodayStatsCell: true,
-          AccountGroupsCell: true,
-          AccountUsageCell: true,
-          Icon: true
-        }
-      }
-    })
-
-    await flushPromises()
-    await (wrapper.vm as any).handleRefresh({
-      id: 7,
-      name: 'OpenAI OAuth',
-      platform: 'openai',
-      type: 'oauth',
-      status: 'active',
-      schedulable: true,
-      current_concurrency: 0,
-      current_window_cost: 0,
-      active_sessions: 0
-    })
-    await flushPromises()
-
-    expect(refreshCredentials).toHaveBeenCalledWith(7)
-    expect(getById).toHaveBeenCalledWith(7)
-    expect((wrapper.vm as any).accounts[0].status).toBe('error')
-    expect(showError).toHaveBeenCalled()
   })
 })

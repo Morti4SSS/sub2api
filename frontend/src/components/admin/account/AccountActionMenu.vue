@@ -98,6 +98,7 @@ const hasQuotaLimit = computed(() => {
     (props.account?.quota_weekly_limit ?? 0) > 0
   )
 })
+
 const handleKeydown = (event: KeyboardEvent) => {
   if (event.key === 'Escape') emit('close')
 }

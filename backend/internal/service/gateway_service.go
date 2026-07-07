@@ -100,11 +100,6 @@ type accountWithLoad struct {
 	loadInfo *AccountLoadInfo
 }
 
-type accountOrderingOptions struct {
-	preferOAuth                  bool
-	preferEarlierOpenAIFreeReset bool
-}
-
 var ForceCacheBillingContextKey = forceCacheBillingKeyType{}
 
 var (
@@ -1967,9 +1962,27 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 
 			if len(routingAvailable) > 0 {
-				ordering := s.resolveAccountOrderingOptions(ctx, groupID, routingAvailableAccounts(routingAvailable), preferOAuth)
-				sortAccountWithLoadByPriorityLoadAndLastUsed(routingAvailable, ordering)
-				shuffleWithinSortGroups(routingAvailable, ordering)
+				// 排序：优先级 > 负载率 > 最后使用时间
+				sort.SliceStable(routingAvailable, func(i, j int) bool {
+					a, b := routingAvailable[i], routingAvailable[j]
+					if a.account.Priority != b.account.Priority {
+						return a.account.Priority < b.account.Priority
+					}
+					if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
+						return a.loadInfo.LoadRate < b.loadInfo.LoadRate
+					}
+					switch {
+					case a.account.LastUsedAt == nil && b.account.LastUsedAt != nil:
+						return true
+					case a.account.LastUsedAt != nil && b.account.LastUsedAt == nil:
+						return false
+					case a.account.LastUsedAt == nil && b.account.LastUsedAt == nil:
+						return false
+					default:
+						return a.account.LastUsedAt.Before(*b.account.LastUsedAt)
+					}
+				})
+				shuffleWithinSortGroups(routingAvailable)
 
 				// 4. 尝试获取槽位
 				for _, item := range routingAvailable {
@@ -2218,9 +2231,8 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			}
 			// 3. 取负载率最低的集合
 			candidates = filterByMinLoadRate(candidates)
-			// 4. LRU 选择最久未用的账号，并保留现有排序偏好策略
-			ordering := s.resolveAccountOrderingOptions(ctx, groupID, accountPtrsFromAccountWithLoad(candidates), preferOAuth)
-			selected := selectByLRU(candidates, ordering)
+			// 4. LRU 选择最久未用的账号
+			selected := selectByLRU(candidates, preferOAuth)
 			if selected == nil {
 				break
 			}
@@ -2251,7 +2263,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	// ============ Layer 3: 兜底排队 ============
-	s.sortCandidatesForFallback(ctx, groupID, candidates, preferOAuth, cfg.FallbackSelectionMode)
+	s.sortCandidatesForFallback(candidates, preferOAuth, cfg.FallbackSelectionMode)
 	for _, acc := range candidates {
 		// 会话数量限制检查（等待计划也需要占用会话配额）
 		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
@@ -2269,8 +2281,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates []*Account, groupID *int64, sessionHash string, preferOAuth bool) (*AccountSelectionResult, bool, error) {
 	ordered := append([]*Account(nil), candidates...)
-	ordering := s.resolveAccountOrderingOptions(ctx, groupID, ordered, preferOAuth)
-	sortAccountsByPriorityAndLastUsed(ordered, ordering)
+	sortAccountsByPriorityAndLastUsed(ordered, preferOAuth)
 
 	for _, acc := range ordered {
 		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
@@ -2334,73 +2345,6 @@ func (s *GatewayService) resolveGroupByID(ctx context.Context, groupID int64) (*
 		return nil, fmt.Errorf("get group failed: %w", err)
 	}
 	return group, nil
-}
-
-func (s *GatewayService) resolveAccountOrderingOptions(ctx context.Context, groupID *int64, accounts []*Account, preferOAuth bool) accountOrderingOptions {
-	return accountOrderingOptions{
-		preferOAuth:                  preferOAuth,
-		preferEarlierOpenAIFreeReset: s.shouldPreferEarlierOpenAIFreeReset(ctx, groupID, accounts),
-	}
-}
-
-func (s *GatewayService) shouldPreferEarlierOpenAIFreeReset(ctx context.Context, groupID *int64, accounts []*Account) bool {
-	if groupID == nil || len(accounts) == 0 {
-		return false
-	}
-	if group := s.groupFromContext(ctx, *groupID); group != nil {
-		return isOpenAIFreeResetPriorityGroup(group.Name)
-	}
-	for _, account := range accounts {
-		if account == nil {
-			continue
-		}
-		if isOpenAIFreeResetPriorityGroupFromAccount(account, *groupID) {
-			return true
-		}
-	}
-	if s.groupRepo == nil {
-		return false
-	}
-	group, err := s.groupRepo.GetByID(ctx, *groupID)
-	if err != nil || group == nil {
-		return false
-	}
-	return isOpenAIFreeResetPriorityGroup(group.Name)
-}
-
-func isOpenAIFreeResetPriorityGroup(name string) bool {
-	return strings.TrimSpace(name) == "账号池"
-}
-
-func isOpenAIFreeResetPriorityGroupFromAccount(account *Account, groupID int64) bool {
-	if account == nil {
-		return false
-	}
-	for _, group := range account.Groups {
-		if group != nil && group.ID == groupID {
-			return isOpenAIFreeResetPriorityGroup(group.Name)
-		}
-	}
-	for _, relation := range account.AccountGroups {
-		if relation.Group != nil && relation.GroupID == groupID {
-			return isOpenAIFreeResetPriorityGroup(relation.Group.Name)
-		}
-	}
-	return false
-}
-
-func routingAvailableAccounts(items []accountWithLoad) []*Account {
-	return accountPtrsFromAccountWithLoad(items)
-}
-
-func accountPtrsFromAccountWithLoad(items []accountWithLoad) []*Account {
-	accounts := make([]*Account, 0, len(items))
-	for _, item := range items {
-		if item.account != nil {
-			accounts = append(accounts, item.account)
-		}
-	}
-	return accounts
 }
 
 func (s *GatewayService) ResolveGroupByID(ctx context.Context, groupID int64) (*Group, error) {
@@ -3081,7 +3025,7 @@ func filterBySoonestReset(accounts []accountWithLoad) []accountWithLoad {
 
 // selectByLRU 从集合中选择最久未用的账号
 // 如果有多个账号具有相同的最小 LastUsedAt，则随机选择一个
-func selectByLRU(accounts []accountWithLoad, ordering accountOrderingOptions) *accountWithLoad {
+func selectByLRU(accounts []accountWithLoad, preferOAuth bool) *accountWithLoad {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -3089,22 +3033,40 @@ func selectByLRU(accounts []accountWithLoad, ordering accountOrderingOptions) *a
 		return &accounts[0]
 	}
 
-	sortAccountWithLoadByPriorityLoadAndLastUsed(accounts, ordering)
-	first := accounts[0]
-	candidateIdxs := []int{0}
-	for i := 1; i < len(accounts); i++ {
-		if sameAccountWithLoadGroup(first, accounts[i], ordering) {
-			candidateIdxs = append(candidateIdxs, i)
-			continue
+	// 1. 找到最小的 LastUsedAt（nil 被视为最小）
+	var minTime *time.Time
+	hasNil := false
+	for _, acc := range accounts {
+		if acc.account.LastUsedAt == nil {
+			hasNil = true
+			break
 		}
-		break
+		if minTime == nil || acc.account.LastUsedAt.Before(*minTime) {
+			minTime = acc.account.LastUsedAt
+		}
 	}
 
+	// 2. 收集所有具有最小 LastUsedAt 的账号索引
+	var candidateIdxs []int
+	for i, acc := range accounts {
+		if hasNil {
+			if acc.account.LastUsedAt == nil {
+				candidateIdxs = append(candidateIdxs, i)
+			}
+		} else {
+			if acc.account.LastUsedAt != nil && acc.account.LastUsedAt.Equal(*minTime) {
+				candidateIdxs = append(candidateIdxs, i)
+			}
+		}
+	}
+
+	// 3. 如果只有一个候选，直接返回
 	if len(candidateIdxs) == 1 {
 		return &accounts[candidateIdxs[0]]
 	}
 
-	if ordering.preferOAuth {
+	// 4. 如果有多个候选且 preferOAuth，优先选择 OAuth 类型
+	if preferOAuth {
 		var oauthIdxs []int
 		for _, idx := range candidateIdxs {
 			if accounts[idx].account.Type == AccountTypeOAuth {
@@ -3121,105 +3083,39 @@ func selectByLRU(accounts []accountWithLoad, ordering accountOrderingOptions) *a
 	return &accounts[selectedIdx]
 }
 
-func sortAccountsByPriorityAndLastUsed(accounts []*Account, ordering accountOrderingOptions) {
-	sort.SliceStable(accounts, func(i, j int) bool {
-		return isAccountBefore(accounts[i], accounts[j], ordering)
-	})
-	shuffleWithinPriorityAndLastUsed(accounts, ordering)
-}
-
-func sortAccountWithLoadByPriorityLoadAndLastUsed(accounts []accountWithLoad, ordering accountOrderingOptions) {
+func sortAccountsByPriorityAndLastUsed(accounts []*Account, preferOAuth bool) {
 	sort.SliceStable(accounts, func(i, j int) bool {
 		a, b := accounts[i], accounts[j]
-		if a.account.Priority != b.account.Priority {
-			return a.account.Priority < b.account.Priority
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
 		}
-		if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
-			return a.loadInfo.LoadRate < b.loadInfo.LoadRate
-		}
-		return isAccountBefore(a.account, b.account, ordering)
-	})
-}
-
-func isAccountBefore(a, b *Account, ordering accountOrderingOptions) bool {
-	if a.Priority != b.Priority {
-		return a.Priority < b.Priority
-	}
-	if ordering.preferEarlierOpenAIFreeReset {
-		if cmp := compareOpenAIFreeResetPriority(a, b); cmp != 0 {
-			return cmp < 0
-		}
-	}
-	switch {
-	case a.LastUsedAt == nil && b.LastUsedAt != nil:
-		return true
-	case a.LastUsedAt != nil && b.LastUsedAt == nil:
-		return false
-	case a.LastUsedAt == nil && b.LastUsedAt == nil:
-		if ordering.preferOAuth && a.Type != b.Type {
-			return a.Type == AccountTypeOAuth
-		}
-		return false
-	default:
-		if !a.LastUsedAt.Equal(*b.LastUsedAt) {
+		switch {
+		case a.LastUsedAt == nil && b.LastUsedAt != nil:
+			return true
+		case a.LastUsedAt != nil && b.LastUsedAt == nil:
+			return false
+		case a.LastUsedAt == nil && b.LastUsedAt == nil:
+			if preferOAuth && a.Type != b.Type {
+				return a.Type == AccountTypeOAuth
+			}
+			return false
+		default:
 			return a.LastUsedAt.Before(*b.LastUsedAt)
 		}
-		if ordering.preferOAuth && a.Type != b.Type {
-			return a.Type == AccountTypeOAuth
-		}
-		return false
-	}
-}
-
-func compareOpenAIFreeResetPriority(a, b *Account) int {
-	aReset, aEligible := openAIFreeResetAtForOrdering(a)
-	bReset, bEligible := openAIFreeResetAtForOrdering(b)
-	switch {
-	case aEligible && bEligible:
-		if aReset.Before(*bReset) {
-			return -1
-		}
-		if bReset.Before(*aReset) {
-			return 1
-		}
-		return 0
-	case aEligible:
-		return -1
-	case bEligible:
-		return 1
-	default:
-		return 0
-	}
-}
-
-func openAIFreeResetAtForOrdering(account *Account) (*time.Time, bool) {
-	if account == nil || !account.IsOpenAI() {
-		return nil, false
-	}
-	if !strings.EqualFold(strings.TrimSpace(account.GetCredential("plan_type")), "free") {
-		return nil, false
-	}
-	raw := strings.TrimSpace(account.GetExtraString("codex_7d_reset_at"))
-	if raw == "" {
-		return nil, false
-	}
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return nil, false
-	}
-	return &parsed, true
+	})
+	shuffleWithinPriorityAndLastUsed(accounts, preferOAuth)
 }
 
 // shuffleWithinSortGroups 对排序后的 accountWithLoad 切片，按 (Priority, LoadRate, LastUsedAt) 分组后组内随机打乱。
 // 防止并发请求读取同一快照时，确定性排序导致所有请求命中相同账号。
-func shuffleWithinSortGroups(accounts []accountWithLoad, ordering accountOrderingOptions) {
+func shuffleWithinSortGroups(accounts []accountWithLoad) {
 	if len(accounts) <= 1 {
 		return
 	}
 	i := 0
 	for i < len(accounts) {
 		j := i + 1
-		for j < len(accounts) && sameAccountWithLoadGroup(accounts[i], accounts[j], ordering) {
+		for j < len(accounts) && sameAccountWithLoadGroup(accounts[i], accounts[j]) {
 			j++
 		}
 		if j-i > 1 {
@@ -3232,17 +3128,11 @@ func shuffleWithinSortGroups(accounts []accountWithLoad, ordering accountOrderin
 }
 
 // sameAccountWithLoadGroup 判断两个 accountWithLoad 是否属于同一排序组
-func sameAccountWithLoadGroup(a, b accountWithLoad, ordering accountOrderingOptions) bool {
+func sameAccountWithLoadGroup(a, b accountWithLoad) bool {
 	if a.account.Priority != b.account.Priority {
 		return false
 	}
 	if a.loadInfo.LoadRate != b.loadInfo.LoadRate {
-		return false
-	}
-	if ordering.preferEarlierOpenAIFreeReset && compareOpenAIFreeResetPriority(a.account, b.account) != 0 {
-		return false
-	}
-	if ordering.preferOAuth && a.account.Type != b.account.Type {
 		return false
 	}
 	return sameLastUsedAt(a.account.LastUsedAt, b.account.LastUsedAt)
@@ -3254,18 +3144,18 @@ func sameAccountWithLoadGroup(a, b accountWithLoad, ordering accountOrderingOpti
 // 因此这里采用"组内分区 + 分区内 shuffle"的方式：
 // - 先把同组账号按 (OAuth / 非 OAuth) 拆成两段，保持 OAuth 段在前；
 // - 再分别在各段内随机打散，避免热点。
-func shuffleWithinPriorityAndLastUsed(accounts []*Account, ordering accountOrderingOptions) {
+func shuffleWithinPriorityAndLastUsed(accounts []*Account, preferOAuth bool) {
 	if len(accounts) <= 1 {
 		return
 	}
 	i := 0
 	for i < len(accounts) {
 		j := i + 1
-		for j < len(accounts) && sameAccountGroup(accounts[i], accounts[j], ordering) {
+		for j < len(accounts) && sameAccountGroup(accounts[i], accounts[j]) {
 			j++
 		}
 		if j-i > 1 {
-			if ordering.preferOAuth {
+			if preferOAuth {
 				oauth := make([]*Account, 0, j-i)
 				others := make([]*Account, 0, j-i)
 				for _, acc := range accounts[i:j] {
@@ -3294,11 +3184,8 @@ func shuffleWithinPriorityAndLastUsed(accounts []*Account, ordering accountOrder
 }
 
 // sameAccountGroup 判断两个 Account 是否属于同一排序组（Priority + LastUsedAt）
-func sameAccountGroup(a, b *Account, ordering accountOrderingOptions) bool {
+func sameAccountGroup(a, b *Account) bool {
 	if a.Priority != b.Priority {
-		return false
-	}
-	if ordering.preferEarlierOpenAIFreeReset && compareOpenAIFreeResetPriority(a, b) != 0 {
 		return false
 	}
 	return sameLastUsedAt(a.LastUsedAt, b.LastUsedAt)
@@ -3318,30 +3205,25 @@ func sameLastUsedAt(a, b *time.Time) bool {
 
 // sortCandidatesForFallback 根据配置选择排序策略
 // mode: "last_used"(按最后使用时间) 或 "random"(随机)
-func (s *GatewayService) sortCandidatesForFallback(ctx context.Context, groupID *int64, accounts []*Account, preferOAuth bool, mode string) {
-	ordering := s.resolveAccountOrderingOptions(ctx, groupID, accounts, preferOAuth)
+func (s *GatewayService) sortCandidatesForFallback(accounts []*Account, preferOAuth bool, mode string) {
 	if mode == "random" {
-		// random 模式下仍需保留 priority 与更快重置偏好，仅在同层候选内随机。
-		sortAccountsByPriorityAndReset(accounts, ordering)
-		shuffleWithinPriority(accounts, ordering)
+		// 先按优先级排序，然后在同优先级内随机打乱
+		sortAccountsByPriorityOnly(accounts, preferOAuth)
+		shuffleWithinPriority(accounts)
 	} else {
 		// 默认按最后使用时间排序
-		sortAccountsByPriorityAndLastUsed(accounts, ordering)
+		sortAccountsByPriorityAndLastUsed(accounts, preferOAuth)
 	}
 }
 
-func sortAccountsByPriorityAndReset(accounts []*Account, ordering accountOrderingOptions) {
+// sortAccountsByPriorityOnly 仅按优先级排序
+func sortAccountsByPriorityOnly(accounts []*Account, preferOAuth bool) {
 	sort.SliceStable(accounts, func(i, j int) bool {
 		a, b := accounts[i], accounts[j]
 		if a.Priority != b.Priority {
 			return a.Priority < b.Priority
 		}
-		if ordering.preferEarlierOpenAIFreeReset {
-			if cmp := compareOpenAIFreeResetPriority(a, b); cmp != 0 {
-				return cmp < 0
-			}
-		}
-		if ordering.preferOAuth && a.Type != b.Type {
+		if preferOAuth && a.Type != b.Type {
 			return a.Type == AccountTypeOAuth
 		}
 		return false
@@ -3349,15 +3231,16 @@ func sortAccountsByPriorityAndReset(accounts []*Account, ordering accountOrderin
 }
 
 // shuffleWithinPriority 在同优先级内随机打乱顺序
-func shuffleWithinPriority(accounts []*Account, ordering accountOrderingOptions) {
+func shuffleWithinPriority(accounts []*Account) {
 	if len(accounts) <= 1 {
 		return
 	}
 	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
 	start := 0
 	for start < len(accounts) {
+		priority := accounts[start].Priority
 		end := start + 1
-		for end < len(accounts) && samePriorityShuffleGroup(accounts[start], accounts[end], ordering) {
+		for end < len(accounts) && accounts[end].Priority == priority {
 			end++
 		}
 		// 对 [start, end) 范围内的账户随机打乱
@@ -3368,19 +3251,6 @@ func shuffleWithinPriority(accounts []*Account, ordering accountOrderingOptions)
 		}
 		start = end
 	}
-}
-
-func samePriorityShuffleGroup(a, b *Account, ordering accountOrderingOptions) bool {
-	if a.Priority != b.Priority {
-		return false
-	}
-	if ordering.preferEarlierOpenAIFreeReset && compareOpenAIFreeResetPriority(a, b) != 0 {
-		return false
-	}
-	if ordering.preferOAuth && a.Type != b.Type {
-		return false
-	}
-	return true
 }
 
 // selectAccountForModelWithPlatform 选择单平台账户（完全隔离）
@@ -4095,9 +3965,6 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 			}
 			return account.IsModelSupported(finalModel)
 		}
-		return true
-	}
-	if IsClaudeCodeClient(ctx) && account.IsClaudeCodeCatalogModel(requestedModel) {
 		return true
 	}
 	return s.isModelSupportedByAccount(account, requestedModel)
@@ -5026,27 +4893,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
-		originalPassthroughModel := passthroughModel
 		if passthroughModel != "" {
-			mappedModel := passthroughModel
-			if IsClaudeCodeClient(ctx) {
-				if candidate, matched := account.ResolveClaudeCodeCatalogModel(passthroughModel); matched {
-					mappedModel = candidate
-				}
-			}
-			if mappedModel == passthroughModel {
-				mappedModel = account.GetMappedModel(passthroughModel)
-			}
-			if mappedModel != passthroughModel {
+			if mappedModel := account.GetMappedModel(passthroughModel); mappedModel != passthroughModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "Passthrough model mapping: %s -> %s (account: %s)", parsed.Model, mappedModel, account.Name)
 				passthroughModel = mappedModel
-			}
-		}
-		if IsClaudeCodeClient(ctx) {
-			if rewritten, changed := ApplyClaudeCodeEffortMapping(passthroughBody, account, originalPassthroughModel); changed {
-				passthroughBody = rewritten
-				logger.LegacyPrintf("service.gateway", "Passthrough Claude Code effort mapping applied: model=%s account=%s", originalPassthroughModel, account.Name)
 			}
 		}
 		return s.forwardAnthropicAPIKeyPassthroughWithInput(ctx, c, account, anthropicPassthroughForwardInput{
@@ -5189,18 +5040,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
 	mappedModel := reqModel
 	mappingSource := ""
-	if IsClaudeCodeClient(ctx) {
-		if candidate, matched := account.ResolveClaudeCodeCatalogModel(reqModel); matched {
-			mappedModel = candidate
-			mappingSource = "claude_code_catalog"
-		}
-	}
 	if account.Type == AccountTypeAPIKey {
-		if mappingSource == "" {
-			mappedModel = account.GetMappedModel(reqModel)
-			if mappedModel != reqModel {
-				mappingSource = "account"
-			}
+		mappedModel = account.GetMappedModel(reqModel)
+		if mappedModel != reqModel {
+			mappingSource = "account"
 		}
 	}
 	if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
@@ -5230,14 +5073,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		reqModel = mappedModel
 		parsed.Model = mappedModel
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
-	}
-	if IsClaudeCodeClient(ctx) {
-		if rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, originalModel); changed {
-			if err := replaceBody(rewritten); err != nil {
-				return nil, err
-			}
-			logger.LegacyPrintf("service.gateway", "Claude Code effort mapping applied: model=%s account=%s", originalModel, account.Name)
-		}
 	}
 
 	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
@@ -10181,7 +10016,7 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 	if s.channelService == nil {
 		return false
 	}
-	upstreamModel := resolveAccountUpstreamModel(ctx, account, requestedModel)
+	upstreamModel := resolveAccountUpstreamModel(account, requestedModel)
 	if upstreamModel == "" {
 		return false
 	}
@@ -10189,14 +10024,9 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 }
 
 // resolveAccountUpstreamModel 确定账号将请求模型映射为什么上游模型。
-func resolveAccountUpstreamModel(ctx context.Context, account *Account, requestedModel string) string {
+func resolveAccountUpstreamModel(account *Account, requestedModel string) string {
 	if account.Platform == PlatformAntigravity {
 		return mapAntigravityModel(account, requestedModel)
-	}
-	if IsClaudeCodeClient(ctx) {
-		if mappedModel, matched := account.ResolveClaudeCodeCatalogModel(requestedModel); matched {
-			return mappedModel
-		}
 	}
 	return account.GetMappedModel(requestedModel)
 }
@@ -10240,26 +10070,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body.Bytes()
-		reqModel := parsed.Model
-		if reqModel != "" {
-			mappedModel := reqModel
-			if IsClaudeCodeClient(ctx) {
-				if candidate, matched := account.ResolveClaudeCodeCatalogModel(reqModel); matched {
-					mappedModel = candidate
-				}
-			}
-			if mappedModel == reqModel {
-				mappedModel = account.GetMappedModel(reqModel)
-			}
-			if mappedModel != reqModel {
+		if reqModel := parsed.Model; reqModel != "" {
+			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
 				passthroughBody = s.replaceModelInBody(passthroughBody, mappedModel)
 				logger.LegacyPrintf("service.gateway", "CountTokens passthrough model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
-			}
-		}
-		if IsClaudeCodeClient(ctx) {
-			if rewritten, changed := ApplyClaudeCodeEffortMapping(passthroughBody, account, reqModel); changed {
-				passthroughBody = rewritten
-				logger.LegacyPrintf("service.gateway", "CountTokens passthrough Claude Code effort mapping applied: model=%s account=%s", reqModel, account.Name)
 			}
 		}
 		return s.forwardCountTokensAnthropicAPIKeyPassthrough(ctx, c, account, passthroughBody)
@@ -10324,19 +10138,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if reqModel != "" {
 		mappedModel := reqModel
 		mappingSource := ""
-		originalReqModel := reqModel
-		if IsClaudeCodeClient(ctx) {
-			if candidate, matched := account.ResolveClaudeCodeCatalogModel(reqModel); matched {
-				mappedModel = candidate
-				mappingSource = "claude_code_catalog"
-			}
-		}
 		if account.Type == AccountTypeAPIKey {
-			if mappingSource == "" {
-				mappedModel = account.GetMappedModel(reqModel)
-				if mappedModel != reqModel {
-					mappingSource = "account"
-				}
+			mappedModel = account.GetMappedModel(reqModel)
+			if mappedModel != reqModel {
+				mappingSource = "account"
 			}
 		}
 		if mappingSource == "" && account.Platform == PlatformAnthropic && account.Type != AccountTypeAPIKey {
@@ -10347,20 +10152,13 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 			}
 		}
 		if mappedModel != reqModel {
+			originalReqModel := reqModel
 			if err := replaceBody(s.replaceModelInBody(body, mappedModel)); err != nil {
 				return err
 			}
 			reqModel = mappedModel
 			parsed.Model = mappedModel
 			logger.LegacyPrintf("service.gateway", "CountTokens model mapping applied: %s -> %s (account: %s, source=%s)", originalReqModel, mappedModel, account.Name, mappingSource)
-		}
-		if IsClaudeCodeClient(ctx) {
-			if rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, originalReqModel); changed {
-				if err := replaceBody(rewritten); err != nil {
-					return err
-				}
-				logger.LegacyPrintf("service.gateway", "CountTokens Claude Code effort mapping applied: model=%s account=%s", originalReqModel, account.Name)
-			}
 		}
 	}
 
@@ -10957,38 +10755,6 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 		modelsListCacheStoreTotal.Add(1)
 	}
 	return cloneStringSlice(models)
-}
-
-func (s *GatewayService) GetClaudeCodeModelCatalog(ctx context.Context, groupID *int64, platform string) []ClaudeCodeModelCatalogEntry {
-	var accounts []Account
-	var err error
-	if groupID != nil {
-		accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
-	} else {
-		accounts, err = s.accountRepo.ListSchedulable(ctx)
-	}
-	if err != nil || len(accounts) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	out := make([]ClaudeCodeModelCatalogEntry, 0)
-	for _, acc := range accounts {
-		if platform != "" && acc.Platform != platform {
-			continue
-		}
-		for _, entry := range acc.GetClaudeCodeModelCatalog() {
-			if _, exists := seen[entry.RequestModel]; exists {
-				continue
-			}
-			seen[entry.RequestModel] = struct{}{}
-			out = append(out, entry)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].RequestModel < out[j].RequestModel
-	})
-	return out
 }
 
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {

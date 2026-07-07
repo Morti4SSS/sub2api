@@ -367,9 +367,6 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
-	// SettingKeyOpenAIFreePoolConfig stores JSON config for admin-managed OpenAI free account pools.
-	SettingKeyOpenAIFreePoolConfig = "openai_free_pool_config"
-
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

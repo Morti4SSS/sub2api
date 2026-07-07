@@ -17,10 +17,9 @@ import (
 
 // DashboardHandler handles admin dashboard statistics
 type DashboardHandler struct {
-	dashboardService      *service.DashboardService
-	aggregationService    *service.DashboardAggregationService
-	openAIFreePoolService *service.OpenAIFreePoolService
-	startTime             time.Time // Server start time for uptime calculation
+	dashboardService   *service.DashboardService
+	aggregationService *service.DashboardAggregationService
+	startTime          time.Time // Server start time for uptime calculation
 }
 
 // NewDashboardHandler creates a new admin dashboard handler
@@ -30,10 +29,6 @@ func NewDashboardHandler(dashboardService *service.DashboardService, aggregation
 		aggregationService: aggregationService,
 		startTime:          time.Now(),
 	}
-}
-
-func (h *DashboardHandler) SetOpenAIFreePoolService(openAIFreePoolService *service.OpenAIFreePoolService) {
-	h.openAIFreePoolService = openAIFreePoolService
 }
 
 // parseTimeRange parses start_date, end_date query parameters
@@ -700,17 +695,4 @@ func (h *DashboardHandler) GetUserBreakdown(c *gin.Context) {
 		"start_date": startTime.Format("2006-01-02"),
 		"end_date":   endTime.Add(-24 * time.Hour).Format("2006-01-02"),
 	})
-}
-
-func (h *DashboardHandler) GetOpenAIFreeResetForecast(c *gin.Context) {
-	if h.openAIFreePoolService == nil {
-		response.InternalError(c, "OpenAI free pool service not available")
-		return
-	}
-	forecast, err := h.openAIFreePoolService.Forecast(c.Request.Context())
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, forecast)
 }

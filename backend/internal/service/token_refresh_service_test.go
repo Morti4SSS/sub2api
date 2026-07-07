@@ -507,10 +507,9 @@ func TestTokenRefreshService_RefreshWithRetry_RefreshFailed(t *testing.T) {
 
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
-	require.Equal(t, 1, repo.updateCalls)           // 记录后台刷新失败快照
-	require.Equal(t, 0, invalidator.calls)          // 刷新失败不应触发缓存失效
-	require.Equal(t, 0, repo.setErrorCalls)         // 可重试错误耗尽不标记 error，下个周期继续重试
-	require.Equal(t, 1, repo.setTempUnschedCalls)   // 重试耗尽后临时不可调度
+	require.Equal(t, 0, repo.updateCalls)   // 刷新失败不应更新
+	require.Equal(t, 0, invalidator.calls)  // 刷新失败不应触发缓存失效
+	require.Equal(t, 0, repo.setErrorCalls) // 可重试错误耗尽不标记 error，下个周期继续重试
 }
 
 // TestTokenRefreshService_RefreshWithRetry_AntigravityRefreshFailed 测试 Antigravity 刷新失败不设置错误状态
@@ -535,10 +534,9 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityRefreshFailed(t *testin
 
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
-	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, 0, repo.updateCalls)
 	require.Equal(t, 0, invalidator.calls)
-	require.Equal(t, 0, repo.setErrorCalls)       // Antigravity 可重试错误不设置错误状态
-	require.Equal(t, 1, repo.setTempUnschedCalls) // 仍会临时不可调度
+	require.Equal(t, 0, repo.setErrorCalls) // Antigravity 可重试错误不设置错误状态
 }
 
 // TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError 测试 Antigravity 不可重试错误
@@ -563,10 +561,9 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError(t *te
 
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
-	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, 0, repo.updateCalls)
 	require.Equal(t, 0, invalidator.calls)
 	require.Equal(t, 1, repo.setErrorCalls) // 不可重试错误应设置错误状态
-	require.Equal(t, 0, repo.setTempUnschedCalls)
 }
 
 // TestTokenRefreshService_RefreshWithRetry_ClearsTempUnschedulable 测试刷新成功后清除临时不可调度（DB + Redis）
@@ -660,7 +657,7 @@ func TestTokenRefreshService_RefreshWithRetry_NoRefreshTokenDoesNotTempUnschedul
 
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
-	require.Equal(t, 1, repo.updateCalls)
+	require.Equal(t, 0, repo.updateCalls)
 	require.Equal(t, 0, repo.setTempUnschedCalls, "missing refresh token should not mark the account temp unschedulable")
 	require.Equal(t, 1, repo.setErrorCalls, "missing refresh token should be treated as a non-retryable credential state")
 }
@@ -848,9 +845,8 @@ func TestPathA_NonRetryableError(t *testing.T) {
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
 	require.Equal(t, 1, repo.setErrorCalls) // 应标记 error 状态
-	require.Equal(t, 1, repo.updateCalls)   // 记录后台刷新失败快照
+	require.Equal(t, 0, repo.updateCalls)   // 不应更新 credentials
 	require.Equal(t, 0, invalidator.calls)  // 不应触发缓存失效
-	require.Equal(t, 0, repo.setTempUnschedCalls)
 }
 
 // TestPathA_RetryableErrorExhausted 统一 API 路径可重试错误耗尽 → 不标记 error
@@ -881,10 +877,9 @@ func TestPathA_RetryableErrorExhausted(t *testing.T) {
 
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
-	require.Equal(t, 0, repo.setErrorCalls)       // 可重试错误不标记 error
-	require.Equal(t, 1, repo.updateCalls)         // 记录后台刷新失败快照
-	require.Equal(t, 0, invalidator.calls)        // 不应触发缓存失效
-	require.Equal(t, 1, repo.setTempUnschedCalls) // 重试耗尽后临时不可调度
+	require.Equal(t, 0, repo.setErrorCalls) // 可重试错误不标记 error
+	require.Equal(t, 0, repo.updateCalls)   // 刷新失败不应更新
+	require.Equal(t, 0, invalidator.calls)  // 不应触发缓存失效
 }
 
 // TestPathA_DBUpdateFailed 统一 API 路径 DB 更新失败 → 返回 error，不执行 postRefreshActions
@@ -904,7 +899,6 @@ func TestPathA_DBUpdateFailed(t *testing.T) {
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "DB update failed")
-	require.Equal(t, 2, repo.updateCalls)  // DB 更新失败后还会记录后台刷新失败快照
+	require.Equal(t, 1, repo.updateCalls)  // DB 更新被尝试
 	require.Equal(t, 0, invalidator.calls) // DB 失败时不应触发缓存失效
-	require.Equal(t, 1, repo.setTempUnschedCalls)
 }

@@ -105,7 +105,7 @@ func TestSelectByLRU(t *testing.T) {
 	muchEarlier := now.Add(-2 * time.Hour)
 
 	t.Run("empty slice", func(t *testing.T) {
-		result := selectByLRU(nil, accountOrderingOptions{})
+		result := selectByLRU(nil, false)
 		require.Nil(t, result)
 	})
 
@@ -113,7 +113,7 @@ func TestSelectByLRU(t *testing.T) {
 		accounts := []accountWithLoad{
 			{account: &Account{ID: 1, LastUsedAt: &now}, loadInfo: &AccountLoadInfo{}},
 		}
-		result := selectByLRU(accounts, accountOrderingOptions{})
+		result := selectByLRU(accounts, false)
 		require.NotNil(t, result)
 		require.Equal(t, int64(1), result.account.ID)
 	})
@@ -124,7 +124,7 @@ func TestSelectByLRU(t *testing.T) {
 			{account: &Account{ID: 2, LastUsedAt: &muchEarlier}, loadInfo: &AccountLoadInfo{}},
 			{account: &Account{ID: 3, LastUsedAt: &earlier}, loadInfo: &AccountLoadInfo{}},
 		}
-		result := selectByLRU(accounts, accountOrderingOptions{})
+		result := selectByLRU(accounts, false)
 		require.NotNil(t, result)
 		require.Equal(t, int64(2), result.account.ID)
 	})
@@ -135,7 +135,7 @@ func TestSelectByLRU(t *testing.T) {
 			{account: &Account{ID: 2, LastUsedAt: nil}, loadInfo: &AccountLoadInfo{}},
 			{account: &Account{ID: 3, LastUsedAt: &earlier}, loadInfo: &AccountLoadInfo{}},
 		}
-		result := selectByLRU(accounts, accountOrderingOptions{})
+		result := selectByLRU(accounts, false)
 		require.NotNil(t, result)
 		require.Equal(t, int64(2), result.account.ID)
 	})
@@ -149,7 +149,7 @@ func TestSelectByLRU(t *testing.T) {
 		// 多次调用应该随机选择，验证结果都在候选范围内
 		validIDs := map[int64]bool{1: true, 2: true, 3: true}
 		for i := 0; i < 10; i++ {
-			result := selectByLRU(accounts, accountOrderingOptions{})
+			result := selectByLRU(accounts, false)
 			require.NotNil(t, result)
 			require.True(t, validIDs[result.account.ID], "selected ID should be one of the candidates")
 		}
@@ -164,7 +164,7 @@ func TestSelectByLRU(t *testing.T) {
 		// 多次调用应该随机选择
 		validIDs := map[int64]bool{1: true, 2: true}
 		for i := 0; i < 10; i++ {
-			result := selectByLRU(accounts, accountOrderingOptions{})
+			result := selectByLRU(accounts, false)
 			require.NotNil(t, result)
 			require.True(t, validIDs[result.account.ID], "selected ID should be one of the candidates")
 		}
@@ -179,7 +179,7 @@ func TestSelectByLRU(t *testing.T) {
 		// preferOAuth 时，应该从 OAuth 类型中选择
 		oauthIDs := map[int64]bool{2: true, 3: true}
 		for i := 0; i < 10; i++ {
-			result := selectByLRU(accounts, accountOrderingOptions{preferOAuth: true})
+			result := selectByLRU(accounts, true)
 			require.NotNil(t, result)
 			require.True(t, oauthIDs[result.account.ID], "should select from OAuth accounts")
 		}
@@ -193,7 +193,7 @@ func TestSelectByLRU(t *testing.T) {
 		// 没有 OAuth 时，从所有候选中选择
 		validIDs := map[int64]bool{1: true, 2: true}
 		for i := 0; i < 10; i++ {
-			result := selectByLRU(accounts, accountOrderingOptions{preferOAuth: true})
+			result := selectByLRU(accounts, true)
 			require.NotNil(t, result)
 			require.True(t, validIDs[result.account.ID])
 		}
@@ -204,7 +204,7 @@ func TestSelectByLRU(t *testing.T) {
 			{account: &Account{ID: 1, LastUsedAt: &earlier, Type: "session"}, loadInfo: &AccountLoadInfo{}},
 			{account: &Account{ID: 2, LastUsedAt: &now, Type: AccountTypeOAuth}, loadInfo: &AccountLoadInfo{}},
 		}
-		result := selectByLRU(accounts, accountOrderingOptions{preferOAuth: true})
+		result := selectByLRU(accounts, true)
 		require.NotNil(t, result)
 		// 有不同 LastUsedAt 时，按时间选择最早的，不受 preferOAuth 影响
 		require.Equal(t, int64(1), result.account.ID)
@@ -238,7 +238,7 @@ func TestLayeredFilterIntegration(t *testing.T) {
 		require.Len(t, step2, 2)
 
 		// 3. LRU 选择 → ID: 3（muchEarlier 最早）
-		selected := selectByLRU(step2, accountOrderingOptions{})
+		selected := selectByLRU(step2, false)
 		require.NotNil(t, selected)
 		require.Equal(t, int64(3), selected.account.ID)
 	})
@@ -257,22 +257,8 @@ func TestLayeredFilterIntegration(t *testing.T) {
 		require.Len(t, step2, 3)
 
 		// LRU 选择最早的
-		selected := selectByLRU(step2, accountOrderingOptions{})
+		selected := selectByLRU(step2, false)
 		require.NotNil(t, selected)
 		require.Equal(t, int64(3), selected.account.ID)
 	})
-}
-
-func TestSortAccountsByPriorityAndReset_PreferEarlierOpenAIFreeReset(t *testing.T) {
-	accounts := []*Account{
-		makeOpenAIFreeAccount(1, 1, "2026-05-29T00:00:00Z", testTimePtr(time.Now().Add(-2*time.Hour))),
-		makeOpenAIFreeAccount(2, 1, "2026-05-27T00:00:00Z", testTimePtr(time.Now())),
-		makeOpenAIFreeAccount(3, 2, "2026-05-26T00:00:00Z", nil),
-	}
-
-	sortAccountsByPriorityAndReset(accounts, accountOrderingOptions{preferEarlierOpenAIFreeReset: true})
-
-	require.Equal(t, int64(2), accounts[0].ID, "同优先级下更早 reset 的 free 账号应排前")
-	require.Equal(t, int64(1), accounts[1].ID)
-	require.Equal(t, int64(3), accounts[2].ID, "更低优先级账号即使 reset 更早也不能越过 priority")
 }

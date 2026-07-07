@@ -268,64 +268,6 @@
             <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
           </div>
 
-          <div class="card p-4">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
-                  {{ t('admin.dashboard.openaiFreeResetForecast.title') }}
-                </h3>
-                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  {{ t('admin.dashboard.openaiFreeResetForecast.description') }}
-                </p>
-              </div>
-              <div class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                {{ t('admin.dashboard.openaiFreeResetForecast.unknownCount', { count: openAIFreeResetForecast?.unknown_count ?? 0 }) }}
-              </div>
-            </div>
-            <div v-if="openAIFreeResetForecastLoading" class="mt-4 flex items-center justify-center py-8">
-              <LoadingSpinner size="md" />
-            </div>
-            <div v-else-if="openAIFreeResetForecastError" class="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800/60 dark:bg-red-900/20 dark:text-red-200">
-              {{ openAIFreeResetForecastError }}
-            </div>
-            <div v-else class="mt-4 space-y-4">
-              <div v-if="!(openAIFreeResetForecast?.days?.length)" class="rounded-lg border border-dashed border-slate-300 px-4 py-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                {{ t('admin.dashboard.openaiFreeResetForecast.empty') }}
-              </div>
-              <div v-else class="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-950/40">
-                <div class="h-72">
-                  <Line
-                    :data="openAIFreeForecastLineData"
-                    :options="openAIFreeForecastLineOptions"
-                  />
-                </div>
-              </div>
-
-              <div v-if="selectedOpenAIFreeForecastDay" class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
-                <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                  <thead class="bg-slate-50 dark:bg-slate-800/70">
-                    <tr>
-                      <th class="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-300">{{ t('admin.dashboard.openaiFreeResetForecast.account') }}</th>
-                      <th class="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-300">{{ t('admin.dashboard.openaiFreeResetForecast.group') }}</th>
-                      <th class="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-300">{{ t('admin.dashboard.openaiFreeResetForecast.proxy') }}</th>
-                      <th class="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-300">{{ t('admin.dashboard.openaiFreeResetForecast.usage') }}</th>
-                      <th class="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-300">{{ t('admin.dashboard.openaiFreeResetForecast.resetAt') }}</th>
-                    </tr>
-                  </thead>
-                  <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
-                    <tr v-for="account in selectedOpenAIFreeForecastDay.accounts" :key="account.account_id">
-                      <td class="px-3 py-2 text-slate-900 dark:text-white">{{ account.account_name }}</td>
-                      <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{{ account.group_name || '-' }}</td>
-                      <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{{ account.proxy_name || '-' }}</td>
-                      <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{{ formatUsagePercent(account.usage_percent) }}</td>
-                      <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{{ formatOpenAIFreeResetAt(account.reset_at) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
           <!-- User Usage Trend (Full Width) -->
           <div class="card p-4">
             <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
@@ -363,8 +305,7 @@ import type {
   TrendDataPoint,
   ModelStat,
   UserUsageTrendPoint,
-  UserSpendingRankingItem,
-  OpenAIFreeResetForecast
+  UserSpendingRankingItem
 } from '@/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
@@ -414,14 +355,9 @@ const rankingItems = ref<UserSpendingRankingItem[]>([])
 const rankingTotalActualCost = ref(0)
 const rankingTotalRequests = ref(0)
 const rankingTotalTokens = ref(0)
-const openAIFreeResetForecast = ref<OpenAIFreeResetForecast | null>(null)
-const openAIFreeResetForecastLoading = ref(false)
-const openAIFreeResetForecastError = ref('')
-const selectedOpenAIFreeForecastDate = ref('')
 let chartLoadSeq = 0
 let usersTrendLoadSeq = 0
 let rankingLoadSeq = 0
-let openAIFreeResetForecastSeq = 0
 const rankingLimit = 12
 
 // Helper function to format date in local timezone
@@ -636,104 +572,6 @@ const goToUserUsage = (item: UserSpendingRankingItem) => {
   })
 }
 
-const selectedOpenAIFreeForecastDay = computed(() => {
-  const selectedDate = selectedOpenAIFreeForecastDate.value
-  if (!selectedDate) return null
-  return openAIFreeResetForecast.value?.days.find(day => day.date === selectedDate) ?? null
-})
-
-const toggleOpenAIFreeForecastDate = (date: string) => {
-  selectedOpenAIFreeForecastDate.value = selectedOpenAIFreeForecastDate.value === date ? '' : date
-}
-
-const formatForecastDateLabel = (value: string) => {
-  const [, month, day] = value.split('-')
-  if (!month || !day) return value
-  return `${month}-${day}`
-}
-
-const openAIFreeForecastLineData = computed(() => ({
-  labels: openAIFreeResetForecast.value?.days.map(day => formatForecastDateLabel(day.date)) ?? [],
-  datasets: [
-    {
-      label: t('admin.dashboard.openaiFreeResetForecast.title'),
-      data: openAIFreeResetForecast.value?.days.map(day => day.count) ?? [],
-      backgroundColor: isDarkMode.value ? 'rgba(59, 130, 246, 0.18)' : 'rgba(37, 99, 235, 0.14)',
-      borderColor: isDarkMode.value ? 'rgba(96, 165, 250, 1)' : 'rgba(29, 78, 216, 1)',
-      borderWidth: 3,
-      pointRadius: 5,
-      pointHoverRadius: 7,
-      pointBackgroundColor: isDarkMode.value ? 'rgba(125, 211, 252, 1)' : 'rgba(37, 99, 235, 1)',
-      pointBorderColor: isDarkMode.value ? 'rgba(15, 23, 42, 1)' : 'rgba(255, 255, 255, 1)',
-      pointBorderWidth: 2,
-      tension: 0.28,
-      fill: true
-    }
-  ]
-}))
-
-const openAIFreeForecastLineOptions = computed(() => ({
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: {
-    mode: 'nearest' as const,
-    axis: 'x' as const,
-    intersect: true
-  },
-  onClick: (_event: unknown, elements: Array<{ index: number }>) => {
-    const first = elements?.[0]
-    if (!first) return
-    const date = openAIFreeResetForecast.value?.days[first.index]?.date
-    if (date) toggleOpenAIFreeForecastDate(date)
-  },
-  plugins: {
-    legend: {
-      display: false
-    },
-    tooltip: {
-      callbacks: {
-        label: (context: any) => {
-          const count = Number(context?.raw ?? 0)
-          return t('admin.dashboard.openaiFreeResetForecast.accountsCount', { count })
-        }
-      }
-    }
-  },
-  scales: {
-    x: {
-      grid: {
-        display: false
-      },
-      ticks: {
-        color: chartColors.value.text,
-        font: {
-          size: 10
-        }
-      }
-    },
-    y: {
-      beginAtZero: true,
-      grid: {
-        color: chartColors.value.grid
-      },
-      ticks: {
-        color: chartColors.value.text,
-        precision: 0
-      }
-    }
-  }
-}))
-
-const formatOpenAIFreeResetAt = (value?: string | null) => {
-  if (!value) return '-'
-  return new Date(value).toLocaleString()
-}
-
-const formatUsagePercent = (value?: number | null) => {
-  if (value === undefined || value === null || Number.isNaN(value)) return '-'
-  return `${Math.round(value)}%`
-}
-
 // Date range change handler
 const onDateRangeChange = (range: {
   startDate: string
@@ -844,36 +682,11 @@ const loadUserSpendingRanking = async () => {
   }
 }
 
-const loadOpenAIFreeResetForecast = async () => {
-  const currentSeq = ++openAIFreeResetForecastSeq
-  openAIFreeResetForecastLoading.value = true
-  openAIFreeResetForecastError.value = ''
-  try {
-    const response = await adminAPI.dashboard.getOpenAIFreeResetForecast()
-    if (currentSeq !== openAIFreeResetForecastSeq) return
-    openAIFreeResetForecast.value = response
-    if (selectedOpenAIFreeForecastDate.value) {
-      const exists = response.days.some(day => day.date === selectedOpenAIFreeForecastDate.value)
-      if (!exists) selectedOpenAIFreeForecastDate.value = ''
-    }
-  } catch (error: any) {
-    if (currentSeq !== openAIFreeResetForecastSeq) return
-    console.error('Error loading OpenAI free reset forecast:', error)
-    openAIFreeResetForecast.value = null
-    openAIFreeResetForecastError.value = error?.message || t('admin.dashboard.openaiFreeResetForecast.loadFailed')
-  } finally {
-    if (currentSeq === openAIFreeResetForecastSeq) {
-      openAIFreeResetForecastLoading.value = false
-    }
-  }
-}
-
 const loadDashboardStats = async () => {
   await Promise.all([
     loadDashboardSnapshot(true),
     loadUsersTrend(),
-    loadUserSpendingRanking(),
-    loadOpenAIFreeResetForecast()
+    loadUserSpendingRanking()
   ])
 }
 
@@ -881,8 +694,7 @@ const loadChartData = async () => {
   await Promise.all([
     loadDashboardSnapshot(false),
     loadUsersTrend(),
-    loadUserSpendingRanking(),
-    loadOpenAIFreeResetForecast()
+    loadUserSpendingRanking()
   ])
 }
 

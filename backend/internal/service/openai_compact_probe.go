@@ -118,10 +118,3 @@ func compactProbeSessionID(accountID int64) string {
 	}
 	return "probe_compact_" + strconv.FormatInt(accountID, 10)
 }
-
-func openAIResponsesProbeSessionID(accountID int64) string {
-	if accountID <= 0 {
-		return "probe_responses"
-	}
-	return "probe_responses_" + strconv.FormatInt(accountID, 10)
-}

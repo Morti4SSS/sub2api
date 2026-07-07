@@ -72,11 +72,6 @@ type stubAdminService struct {
 		sortOrder string
 		calls     int
 	}
-	lastSetAccountError struct {
-		id       int64
-		errorMsg string
-		calls    int
-	}
 	mu sync.Mutex
 }
 
@@ -389,12 +384,6 @@ func (s *stubAdminService) ListOpenAISchedulableAccountsForSchedulerScore(_ cont
 }
 
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
-	for i := range s.accounts {
-		if s.accounts[i].ID == id {
-			account := s.accounts[i]
-			return &account, nil
-		}
-	}
 	account := service.Account{ID: id, Name: "account", Status: service.StatusActive}
 	return &account, nil
 }
@@ -446,16 +435,6 @@ func (s *stubAdminService) ClearAccountError(ctx context.Context, id int64) (*se
 }
 
 func (s *stubAdminService) SetAccountError(ctx context.Context, id int64, errorMsg string) error {
-	s.lastSetAccountError.id = id
-	s.lastSetAccountError.errorMsg = errorMsg
-	s.lastSetAccountError.calls++
-	for i := range s.accounts {
-		if s.accounts[i].ID == id {
-			s.accounts[i].Status = service.StatusError
-			s.accounts[i].ErrorMessage = errorMsg
-			break
-		}
-	}
 	return nil
 }
 

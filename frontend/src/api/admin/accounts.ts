@@ -20,12 +20,7 @@ import type {
   CodexSessionImportResult,
   OpenAICodexPATCreateRequest,
   CheckMixedChannelRequest,
-  CheckMixedChannelResponse,
-  OpenAIFreePoolApplyResult,
-  OpenAIFreePoolConfig,
-  OpenAIFreePoolLockRequest,
-  OpenAIFreePoolManagedAccount,
-  OpenAIFreePoolPreview
+  CheckMixedChannelResponse
 } from '@/types'
 
 /**
@@ -697,13 +692,11 @@ export async function batchClearError(accountIds: number[]): Promise<BatchOperat
 /**
  * Batch refresh account credentials
  * @param accountIds - Array of account IDs
- * @param concurrency - Optional max concurrent refresh count
  * @returns Batch operation result
  */
-export async function batchRefresh(accountIds: number[], concurrency?: number): Promise<BatchOperationResult> {
+export async function batchRefresh(accountIds: number[]): Promise<BatchOperationResult> {
   const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-refresh', {
     account_ids: accountIds,
-    ...(concurrency !== undefined ? { concurrency } : {}),
   }, {
     timeout: 120000  // 120s timeout for large batch refreshes
   })
@@ -717,47 +710,6 @@ export async function batchRefresh(accountIds: number[], concurrency?: number): 
  */
 export async function setPrivacy(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/set-privacy`)
-  return data
-}
-
-export async function getOpenAIFreePoolConfig(): Promise<OpenAIFreePoolConfig> {
-  const { data } = await apiClient.get<OpenAIFreePoolConfig>('/admin/accounts/openai-free-pools/config')
-  return data
-}
-
-export async function updateOpenAIFreePoolConfig(payload: OpenAIFreePoolConfig): Promise<OpenAIFreePoolConfig> {
-  const { data } = await apiClient.put<OpenAIFreePoolConfig>('/admin/accounts/openai-free-pools/config', payload)
-  return data
-}
-
-export async function previewOpenAIFreePool(forceRebalance: boolean = false): Promise<OpenAIFreePoolPreview> {
-  const { data } = await apiClient.get<OpenAIFreePoolPreview>('/admin/accounts/openai-free-pools/preview', {
-    params: {
-      force_rebalance: forceRebalance ? 'true' : 'false'
-    }
-  })
-  return data
-}
-
-export async function applyOpenAIFreePool(forceRebalance: boolean = false): Promise<OpenAIFreePoolApplyResult> {
-  const { data } = await apiClient.post<OpenAIFreePoolApplyResult>('/admin/accounts/openai-free-pools/apply', {
-    force_rebalance: forceRebalance
-  })
-  return data
-}
-
-export async function getOpenAIFreePoolAccounts(): Promise<OpenAIFreePoolManagedAccount[]> {
-  const { data } = await apiClient.get<OpenAIFreePoolManagedAccount[]>('/admin/accounts/openai-free-pools/accounts')
-  return data
-}
-
-export async function lockOpenAIFreePoolAccount(payload: OpenAIFreePoolLockRequest): Promise<{ message: string }> {
-  const { data } = await apiClient.post<{ message: string }>('/admin/accounts/openai-free-pools/locks', payload)
-  return data
-}
-
-export async function unlockOpenAIFreePoolAccount(accountId: number): Promise<{ message: string }> {
-  const { data } = await apiClient.delete<{ message: string }>(`/admin/accounts/openai-free-pools/locks/${accountId}`)
   return data
 }
 
@@ -890,14 +842,7 @@ export const accountsAPI = {
   batchClearError,
   batchRefresh,
   setPrivacy,
-  getOpenAIFreePoolConfig,
-  updateOpenAIFreePoolConfig,
-  previewOpenAIFreePool,
-  applyOpenAIFreePool,
-  getOpenAIFreePoolAccounts,
   revertProxyFallback,
-  unlockOpenAIFreePoolAccount,
-  lockOpenAIFreePoolAccount,
   queryOpenAIQuota,
   resetOpenAIQuota,
   createSparkShadow

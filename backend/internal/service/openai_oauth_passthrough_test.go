@@ -1111,60 +1111,6 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_PreservesClaudeCodeCodexPluginHeaders(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	const (
-		claudeCodeUA         = "Claude Code/0.5.0 (Macos 15.5; arm64) iTerm2.app (Claude Code; 1.0.4)"
-		claudeCodeOriginator = "Claude Code"
-	)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
-	c.Request.Header.Set("User-Agent", claudeCodeUA)
-	c.Request.Header.Set("Originator", claudeCodeOriginator)
-	c.Request.Header.Set("Session_ID", "cc-session")
-	c.Request.Header.Set("Conversation_ID", "cc-conversation")
-
-	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
-
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-	}
-	upstream := &httpUpstreamRecorder{resp: resp}
-
-	svc := &OpenAIGatewayService{
-		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
-		httpUpstream: upstream,
-	}
-
-	account := &Account{
-		ID:             123,
-		Name:           "acc",
-		Platform:       PlatformOpenAI,
-		Type:           AccountTypeOAuth,
-		Concurrency:    1,
-		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_passthrough": true, "codex_cli_only_allowed_clients": []any{"claude_code"}},
-		Status:         StatusActive,
-		Schedulable:    true,
-		RateMultiplier: f64p(1),
-	}
-
-	_, err := svc.Forward(context.Background(), c, account, inputBody)
-	require.NoError(t, err)
-	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, claudeCodeUA, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, claudeCodeOriginator, upstream.lastReq.Header.Get("Originator"))
-	require.NotEqual(t, "cc-session", upstream.lastReq.Header.Get("Session_ID"))
-	require.NotEqual(t, "cc-conversation", upstream.lastReq.Header.Get("Conversation_ID"))
-	require.NotEmpty(t, upstream.lastReq.Header.Get("Session_ID"))
-	require.NotEmpty(t, upstream.lastReq.Header.Get("Conversation_ID"))
-}
-
 func TestOpenAIGatewayService_CodexCLIOnly_RejectsNonCodexClient(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

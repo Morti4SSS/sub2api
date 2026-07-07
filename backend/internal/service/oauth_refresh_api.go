@@ -29,27 +29,6 @@ type OAuthRefreshResult struct {
 	LockHeld       bool           // 锁被其他 worker 持有（未执行刷新）
 }
 
-type OAuthRefreshOption func(*oauthRefreshOptions)
-
-type oauthRefreshOptions struct {
-	source               string
-	checkIntervalSeconds int64
-}
-
-func WithOAuthRefreshSource(source string) OAuthRefreshOption {
-	return func(opts *oauthRefreshOptions) {
-		opts.source = strings.TrimSpace(source)
-	}
-}
-
-func WithOAuthRefreshCheckInterval(interval time.Duration) OAuthRefreshOption {
-	return func(opts *oauthRefreshOptions) {
-		if interval > 0 {
-			opts.checkIntervalSeconds = int64(interval.Seconds())
-		}
-	}
-}
-
 // OAuthRefreshAPI 统一的 OAuth Token 刷新入口
 // 封装分布式锁、进程内互斥锁、DB 重读、已刷新检查、竞争恢复等通用逻辑
 type OAuthRefreshAPI struct {
@@ -98,15 +77,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	account *Account,
 	executor OAuthRefreshExecutor,
 	refreshWindow time.Duration,
-	options ...OAuthRefreshOption,
 ) (*OAuthRefreshResult, error) {
-	opts := oauthRefreshOptions{}
-	for _, option := range options {
-		if option != nil {
-			option(&opts)
-		}
-	}
-
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
@@ -176,7 +147,6 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	// 5. 设置版本号 + 更新 DB
 	if newCredentials != nil {
 		newCredentials["_token_version"] = time.Now().UnixMilli()
-		annotateOAuthRefreshCredentials(newCredentials, freshAccount, opts, refreshWindow)
 		if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
 			slog.Error("oauth_refresh_update_failed",
 				"account_id", freshAccount.ID,
@@ -193,78 +163,6 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		NewCredentials: newCredentials,
 		Account:        freshAccount,
 	}, nil
-}
-
-func annotateOAuthRefreshCredentials(credentials map[string]any, oldAccount *Account, opts oauthRefreshOptions, refreshWindow time.Duration) {
-	if credentials == nil {
-		return
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	source := strings.TrimSpace(opts.source)
-	if source == "" {
-		source = "request"
-	}
-	credentials["_token_refresh_last_source"] = source
-	credentials["_token_refresh_last_attempt_at"] = now
-	credentials["_token_refresh_last_checked_at"] = now
-	credentials["_token_refresh_last_success_at"] = now
-	credentials["_token_refresh_last_error_at"] = ""
-	credentials["_token_refresh_last_error"] = ""
-	credentials["_token_refresh_last_result"] = "success"
-	credentials["_token_refresh_at_status"] = classifyOAuthRefreshAccessTokenStatus(oldAccount, credentials)
-	savedRT, rtStatus := classifyOAuthRefreshRefreshTokenStatus(oldAccount, credentials)
-	credentials["_token_refresh_rt_saved"] = savedRT
-	credentials["_token_refresh_rt_status"] = rtStatus
-	if source == "background" {
-		credentials["_token_refresh_background_last_checked_at"] = now
-		credentials["_token_refresh_background_last_success_at"] = now
-		credentials["_token_refresh_background_last_error_at"] = ""
-		credentials["_token_refresh_background_last_error"] = ""
-		credentials["_token_refresh_background_rt_saved"] = savedRT
-		credentials["_token_refresh_background_rt_status"] = rtStatus
-		if refreshWindow > 0 {
-			credentials["_token_refresh_background_refresh_before_seconds"] = int64(refreshWindow.Seconds())
-		}
-		if opts.checkIntervalSeconds > 0 {
-			credentials["_token_refresh_background_check_interval_seconds"] = opts.checkIntervalSeconds
-		}
-	} else if refreshWindow > 0 {
-		credentials["_token_refresh_refresh_before_seconds"] = int64(refreshWindow.Seconds())
-	}
-}
-
-func classifyOAuthRefreshAccessTokenStatus(oldAccount *Account, credentials map[string]any) string {
-	before := ""
-	if oldAccount != nil {
-		before = oldAccount.GetCredential("expires_at")
-	}
-	after := (&Account{Credentials: credentials}).GetCredential("expires_at")
-	switch {
-	case after == "":
-		return "missing_after_refresh"
-	case before != "" && before != after:
-		return "refreshed"
-	default:
-		return "unchanged"
-	}
-}
-
-func classifyOAuthRefreshRefreshTokenStatus(oldAccount *Account, credentials map[string]any) (bool, string) {
-	oldRT := ""
-	if oldAccount != nil {
-		oldRT = oldAccount.GetCredential("refresh_token")
-	}
-	newRT := (&Account{Credentials: credentials}).GetCredential("refresh_token")
-	switch {
-	case newRT == "":
-		return false, "missing_after_refresh"
-	case oldRT == "":
-		return true, "saved_no_previous"
-	case oldRT != newRT:
-		return true, "rotated"
-	default:
-		return true, "unchanged"
-	}
 }
 
 // isInvalidGrantError 检查错误是否为 invalid_grant
