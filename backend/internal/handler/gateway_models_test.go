@@ -228,7 +228,7 @@ func TestGatewayModels_AnthropicGroupKeepsDefaultModelsForNonClaudeCodeClient(t 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.NotContains(t, modelIDsForTest(got.Data), "relay-sonnet")
-	require.Contains(t, modelIDsForTest(got.Data), "claude-sonnet-4-5")
+	require.Contains(t, modelIDsForTest(got.Data), "claude-sonnet-4-5-20250929")
 }
 
 func TestGatewayModels_CustomModelsListDisabledKeepsOriginalModels(t *testing.T) {

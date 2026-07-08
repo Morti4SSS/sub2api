@@ -60,8 +60,7 @@ func TestCreateClaudeTestPayloadUsesCustomPrompt(t *testing.T) {
 
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), "say compact ok")
-	require.NotContains(t, string(raw), "hi")
+	require.Equal(t, "say compact ok", gjson.GetBytes(raw, "messages.0.content.0.text").String())
 }
 
 func TestCreateClaudeTestPayloadDefaultsBlankPrompt(t *testing.T) {
@@ -70,22 +69,21 @@ func TestCreateClaudeTestPayloadDefaultsBlankPrompt(t *testing.T) {
 
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), defaultClaudeTestPrompt)
+	require.Equal(t, defaultClaudeTestPrompt, gjson.GetBytes(raw, "messages.0.content.0.text").String())
 }
 
 func TestCreateOpenAITestPayloadUsesCustomPrompt(t *testing.T) {
 	payload := createOpenAITestPayloadWithPrompt("gpt-5.4", false, "say compact ok")
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), "say compact ok")
-	require.NotContains(t, string(raw), "hi")
+	require.Equal(t, "say compact ok", gjson.GetBytes(raw, "input.0.content.0.text").String())
 }
 
 func TestCreateOpenAITestPayloadDefaultsBlankPrompt(t *testing.T) {
 	payload := createOpenAITestPayloadWithPrompt("gpt-5.4", false, "   ")
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), defaultOpenAITextTestPrompt)
+	require.Equal(t, defaultOpenAITextTestPrompt, gjson.GetBytes(raw, "input.0.content.0.text").String())
 }
 
 func newTestContext() (*gin.Context, *httptest.ResponseRecorder) {
