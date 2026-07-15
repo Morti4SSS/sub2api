@@ -159,3 +159,61 @@ func TestClassifyNoAccountError_FromGin_NilContextStillSafe(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, cls.Status, "even with a nil gin context the classifier must still run and yield a coherent response")
 	require.True(t, cls.ModelNotFound)
 }
+
+func TestClassifyNoAccountError_ClaudeCodeUnknownShellReturnsRouteNotFound(t *testing.T) {
+	c := newTestGinContextWithRequest()
+	c.Request = c.Request.WithContext(service.SetClaudeCodeClient(c.Request.Context(), true))
+	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: false}}
+	apiKey := &service.APIKey{
+		GroupID: ptrInt64(7),
+		Group: &service.Group{
+			ID:       7,
+			Platform: service.PlatformAnthropic,
+			ModelsListConfig: service.GroupModelsListConfig{
+				Enabled: true,
+				Models:  []string{"claude-opus-4-8"},
+			},
+		},
+	}
+
+	cls := classifyNoAccountErrorFromGin(c, fd, apiKey, "claude-sonnet-5", "claude-sonnet-5", service.PlatformAnthropic)
+
+	require.Equal(t, http.StatusNotFound, cls.Status)
+	require.Equal(t, "route_not_found", cls.ErrType)
+	require.Contains(t, cls.Message, "claude-sonnet-5")
+}
+
+func TestClassifyNoAccountError_ClaudeCodeKnownShellWithoutAccountReturnsNoEligibleAccount(t *testing.T) {
+	c := newTestGinContextWithRequest()
+	c.Request = c.Request.WithContext(service.SetClaudeCodeClient(c.Request.Context(), true))
+	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: false, HasModelSupport: false}}
+	apiKey := &service.APIKey{
+		GroupID: ptrInt64(7),
+		Group: &service.Group{
+			ID:       7,
+			Platform: service.PlatformAnthropic,
+			ModelsListConfig: service.GroupModelsListConfig{
+				Enabled: true,
+				Models:  []string{"claude-opus-4-8"},
+			},
+		},
+	}
+
+	cls := classifyNoAccountErrorFromGin(c, fd, apiKey, "claude-opus-4-8", "claude-opus-4-8", service.PlatformAnthropic)
+
+	require.Equal(t, http.StatusServiceUnavailable, cls.Status)
+	require.Equal(t, "no_eligible_account", cls.ErrType)
+	require.Contains(t, cls.Message, "claude-opus-4-8")
+}
+
+func TestClassifyNoAccountError_ClaudeCodeUsesDefaultCatalogWhenGroupSnapshotIsMissing(t *testing.T) {
+	c := newTestGinContextWithRequest()
+	c.Request = c.Request.WithContext(service.SetClaudeCodeClient(c.Request.Context(), true))
+	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: false, HasModelSupport: false}}
+	apiKey := &service.APIKey{GroupID: ptrInt64(7)}
+
+	cls := classifyNoAccountErrorFromGin(c, fd, apiKey, "claude-opus-4-8", "claude-opus-4-8", service.PlatformAnthropic)
+
+	require.Equal(t, http.StatusServiceUnavailable, cls.Status)
+	require.Equal(t, "no_eligible_account", cls.ErrType)
+}

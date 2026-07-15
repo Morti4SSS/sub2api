@@ -15,10 +15,14 @@ import (
 // account selection failed with ErrNoAvailableAccounts. Handlers obtain it
 // via classifyNoAccountError and choose between:
 //
-//   - 404 model_not_found — the group has accounts, but none of them are
+//   - 404 model_not_found — a non-Claude-Code group has accounts, but none of them are
 //     configured to serve the requested model (config / typo / unsupported
 //     model). Returning 503 here misleads operators and trips reverse-proxy
 //     health checks; 404 lets the client surface the real problem.
+//
+//   - 404 route_not_found — a Claude Code shell is absent from the stable group catalog.
+//
+//   - 503 no_eligible_account — the shell exists, but no enabled account explicitly maps it.
 //
 //   - 503 api_error — accounts that could serve the model exist but are
 //     temporarily exhausted (rate limit, quota auto-pause, runtime block) OR
@@ -75,6 +79,26 @@ func classifyNoAccountError(
 		displayModel = routingModel
 	}
 	if diag == nil || apiKey == nil || apiKey.GroupID == nil || routingModel == "" {
+		return fallback
+	}
+
+	if service.IsClaudeCodeClient(ctx) && platform == service.PlatformAnthropic {
+		if !apiKey.Group.ExposesClaudeCodeModel(displayModel) {
+			return noAccountErrorClassification{
+				Status:        http.StatusNotFound,
+				ErrType:       "route_not_found",
+				Message:       fmt.Sprintf("Claude Code route %q does not exist in this group", displayModel),
+				ModelNotFound: true,
+			}
+		}
+		result := diag.DiagnoseModelAvailabilityForPlatform(ctx, apiKey.GroupID, routingModel, platform)
+		if !result.HasModelSupport {
+			return noAccountErrorClassification{
+				Status:  http.StatusServiceUnavailable,
+				ErrType: "no_eligible_account",
+				Message: fmt.Sprintf("No enabled account is configured for Claude Code route %q", displayModel),
+			}
+		}
 		return fallback
 	}
 

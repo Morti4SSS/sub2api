@@ -561,6 +561,87 @@ type ClaudeCodeModelCatalogEntry struct {
 	Capabilities  []string
 }
 
+// ClaudeCodeRoute is the account-owned mapping from a stable Claude Code shell to an upstream model.
+type ClaudeCodeRoute struct {
+	ShellModel    string
+	UpstreamModel string
+	DisplayName   string
+	ContextWindow int64
+	Thinking      map[string]any
+}
+
+// GetClaudeCodeRoutes reads the r3 owner and falls back to the r2 catalog only when the owner is absent.
+func (a *Account) GetClaudeCodeRoutes() []ClaudeCodeRoute {
+	if a == nil || a.Extra == nil {
+		return nil
+	}
+	if raw, exists := a.Extra["claude_code_routes"]; exists {
+		items, ok := raw.([]any)
+		if !ok {
+			return nil
+		}
+		routes := make([]ClaudeCodeRoute, 0, len(items))
+		for _, item := range items {
+			entry, ok := item.(map[string]any)
+			if !ok || entry == nil {
+				continue
+			}
+			route := ClaudeCodeRoute{
+				ShellModel:    extraStringValue(entry["shell_model"]),
+				UpstreamModel: extraStringValue(entry["upstream_model"]),
+				DisplayName:   extraStringValue(entry["display_name"]),
+				ContextWindow: extraPositiveInt64Value(entry["context_window"]),
+			}
+			if thinking, ok := entry["thinking"].(map[string]any); ok {
+				route.Thinking = thinking
+			}
+			if route.ShellModel == "" || route.UpstreamModel == "" {
+				continue
+			}
+			routes = append(routes, route)
+		}
+		return routes
+	}
+
+	catalog := a.GetClaudeCodeModelCatalog()
+	routes := make([]ClaudeCodeRoute, 0, len(catalog))
+	for _, entry := range catalog {
+		upstream := entry.UpstreamModel
+		if upstream == "" {
+			if mapped, matched := a.ResolveMappedModel(entry.RequestModel); matched {
+				upstream = mapped
+			} else {
+				upstream = entry.RequestModel
+			}
+		}
+		contextWindow := int64(0)
+		if entry.Supports1M {
+			contextWindow = 1_000_000
+		}
+		routes = append(routes, ClaudeCodeRoute{
+			ShellModel:    entry.RequestModel,
+			UpstreamModel: upstream,
+			DisplayName:   entry.DisplayName,
+			ContextWindow: contextWindow,
+		})
+	}
+	return routes
+}
+
+// ResolveClaudeCodeRouteModel resolves an explicitly configured Claude Code shell.
+func (a *Account) ResolveClaudeCodeRouteModel(shellModel string) (string, bool) {
+	shellModel = strings.TrimSpace(shellModel)
+	if shellModel == "" {
+		return "", false
+	}
+	for _, route := range a.GetClaudeCodeRoutes() {
+		if route.ShellModel == shellModel {
+			return route.UpstreamModel, true
+		}
+	}
+	return "", false
+}
+
 func (a *Account) GetClaudeCodeModelCatalog() []ClaudeCodeModelCatalogEntry {
 	if a == nil || a.Extra == nil {
 		return nil
@@ -593,20 +674,7 @@ func (a *Account) GetClaudeCodeModelCatalog() []ClaudeCodeModelCatalogEntry {
 }
 
 func (a *Account) ResolveClaudeCodeCatalogModel(requestModel string) (string, bool) {
-	requestModel = strings.TrimSpace(requestModel)
-	if requestModel == "" {
-		return "", false
-	}
-	for _, entry := range a.GetClaudeCodeModelCatalog() {
-		if entry.RequestModel != requestModel {
-			continue
-		}
-		if entry.UpstreamModel != "" {
-			return entry.UpstreamModel, true
-		}
-		return entry.RequestModel, true
-	}
-	return "", false
+	return a.ResolveClaudeCodeRouteModel(requestModel)
 }
 
 func (a *Account) IsClaudeCodeCatalogModel(requestModel string) bool {
@@ -628,6 +696,26 @@ func extraStringValue(raw any) string {
 	default:
 		return ""
 	}
+}
+
+func extraPositiveInt64Value(raw any) int64 {
+	var value int64
+	switch v := raw.(type) {
+	case int:
+		value = int64(v)
+	case int64:
+		value = v
+	case float64:
+		value = int64(v)
+	case json.Number:
+		value, _ = v.Int64()
+	case string:
+		value, _ = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	}
+	if value <= 0 {
+		return 0
+	}
+	return value
 }
 
 func extraStringSliceValue(raw any) []string {

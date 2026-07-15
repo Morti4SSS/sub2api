@@ -55,6 +55,92 @@ func TestAccountClaudeCodeModelCatalogResolvesUpstreamModel(t *testing.T) {
 	require.Equal(t, "upstream-sonnet", upstream)
 }
 
+func TestAccountClaudeCodeRoutesPreferNewOwnerOverLegacyCatalog(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"claude_code_routes": []any{
+				map[string]any{
+					"shell_model":    "claude-opus-4-8",
+					"upstream_model": "glm-5.2",
+					"display_name":   "Strong model route",
+					"context_window": 200000,
+				},
+			},
+			"claude_code_model_catalog": []any{
+				map[string]any{
+					"role":           "opus",
+					"display_name":   "Legacy route",
+					"request_model":  "claude-opus-4-8",
+					"upstream_model": "legacy-model",
+				},
+			},
+		},
+	}
+
+	routes := account.GetClaudeCodeRoutes()
+	require.Len(t, routes, 1)
+	require.Equal(t, "claude-opus-4-8", routes[0].ShellModel)
+	require.Equal(t, "glm-5.2", routes[0].UpstreamModel)
+	require.Equal(t, int64(200000), routes[0].ContextWindow)
+
+	upstream, matched := account.ResolveClaudeCodeRouteModel("claude-opus-4-8")
+	require.True(t, matched)
+	require.Equal(t, "glm-5.2", upstream)
+}
+
+func TestAccountClaudeCodeRoutesFallBackToLegacyCatalog(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"claude_code_model_catalog": []any{
+				map[string]any{
+					"role":           "opus",
+					"display_name":   "Legacy route",
+					"request_model":  "claude-opus-4-8",
+					"upstream_model": "legacy-model",
+				},
+			},
+		},
+	}
+
+	upstream, matched := account.ResolveClaudeCodeRouteModel("claude-opus-4-8")
+	require.True(t, matched)
+	require.Equal(t, "legacy-model", upstream)
+}
+
+func TestGatewayServiceClaudeCodeRoutingRequiresExplicitAccountRoute(t *testing.T) {
+	svc := &GatewayService{}
+	ctx := SetClaudeCodeClient(context.Background(), true)
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-opus-4-8": "glm-5.2",
+			},
+		},
+	}
+
+	require.False(t, svc.isModelSupportedByAccountWithContext(ctx, account, "claude-opus-4-8"))
+
+	account.Extra = map[string]any{
+		"claude_code_routes": []any{
+			map[string]any{
+				"shell_model":    "claude-opus-4-8",
+				"upstream_model": "glm-5.2",
+			},
+		},
+	}
+	require.True(t, svc.isModelSupportedByAccountWithContext(ctx, account, "claude-opus-4-8"))
+	require.False(t, svc.isModelSupportedByAccountWithContext(ctx, account, "claude-sonnet-5"))
+
+	nonClaudeCodeCtx := SetClaudeCodeClient(context.Background(), false)
+	require.True(t, svc.isModelSupportedByAccountWithContext(nonClaudeCodeCtx, account, "claude-opus-4-8"))
+}
+
 func TestGatewayServiceGetClaudeCodeModelCatalogDeduplicatesByRequestModel(t *testing.T) {
 	groupID := int64(7)
 	repo := &claudeCodeCatalogRepoStub{

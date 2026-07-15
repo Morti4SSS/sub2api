@@ -181,6 +181,16 @@ func DefaultModelIDs() []string {
 	return ids
 }
 
+// DefaultModelByID returns metadata from the stable Claude Code shell catalog.
+func DefaultModelByID(id string) (Model, bool) {
+	for _, model := range DefaultModels {
+		if model.ID == id {
+			return model, true
+		}
+	}
+	return Model{}, false
+}
+
 // DefaultTestModel 测试时使用的默认模型
 const DefaultTestModel = "claude-sonnet-4-5-20250929"
 

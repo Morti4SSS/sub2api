@@ -1005,11 +1005,15 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 
 	SetClaudeCodeClientContext(c, nil, nil)
 	if service.IsClaudeCodeClient(c.Request.Context()) && (platform == service.PlatformAnthropic || platform == "") {
-		catalog := h.gatewayService.GetClaudeCodeModelCatalog(c.Request.Context(), groupID, service.PlatformAnthropic)
-		if len(catalog) > 0 {
-			writeClaudeCodeCatalogModelsList(c, catalog)
-			return
+		var group *service.Group
+		if apiKey != nil {
+			group = apiKey.Group
 		}
+		c.JSON(http.StatusOK, gin.H{
+			"object": "list",
+			"data":   service.ClaudeCodeModelsForGroup(group),
+		})
+		return
 	}
 
 	// Get available models from account configurations for the selected group platform.

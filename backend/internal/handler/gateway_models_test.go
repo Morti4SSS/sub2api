@@ -135,7 +135,7 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	require.Equal(t, []string{"gemini-2.5-flash"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_AnthropicGroupUsesClaudeCodeCatalog(t *testing.T) {
+func TestGatewayModels_ClaudeCodeUsesStableGroupCatalogInsteadOfAccountCatalog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(31)
@@ -169,7 +169,14 @@ func TestGatewayModels_AnthropicGroupUsesClaudeCodeCatalog(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	c.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+		Group: &service.Group{
+			ID:       groupID,
+			Platform: service.PlatformAnthropic,
+			ModelsListConfig: service.GroupModelsListConfig{
+				Enabled: true,
+				Models:  []string{"claude-opus-4-8"},
+			},
+		},
 	})
 
 	h.Models(c)
@@ -180,10 +187,9 @@ func TestGatewayModels_AnthropicGroupUsesClaudeCodeCatalog(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, "list", got.Object)
 	require.Len(t, got.Data, 1)
-	require.Equal(t, "relay-sonnet", got.Data[0].ID)
-	require.Equal(t, "Relay Sonnet", got.Data[0].DisplayName)
-	require.Equal(t, []string{"thinking", "effort"}, got.Data[0].Capabilities)
-	require.Equal(t, float64(1000000), got.Data[0].Metadata["context_window"])
+	require.Equal(t, "claude-opus-4-8", got.Data[0].ID)
+	require.Equal(t, "Claude Opus 4.8", got.Data[0].DisplayName)
+	require.NotContains(t, modelIDsForTest(got.Data), "relay-sonnet")
 }
 
 func TestGatewayModels_AnthropicGroupKeepsDefaultModelsForNonClaudeCodeClient(t *testing.T) {
