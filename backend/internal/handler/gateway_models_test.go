@@ -46,6 +46,16 @@ func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Cont
 	return out, nil
 }
 
+func (s *gatewayModelsAccountRepoStub) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
+	accounts, ok := s.byGroup[groupID]
+	if !ok {
+		return nil, nil
+	}
+	out := make([]service.Account, len(accounts))
+	copy(out, accounts)
+	return out, nil
+}
+
 func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHandler {
 	return &GatewayHandler{
 		gatewayService: service.NewGatewayService(

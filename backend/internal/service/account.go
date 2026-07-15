@@ -558,6 +558,7 @@ type ClaudeCodeModelCatalogEntry struct {
 	RequestModel  string
 	UpstreamModel string
 	Supports1M    bool
+	ContextWindow int64
 	Capabilities  []string
 }
 
@@ -628,18 +629,27 @@ func (a *Account) GetClaudeCodeRoutes() []ClaudeCodeRoute {
 	return routes
 }
 
-// ResolveClaudeCodeRouteModel resolves an explicitly configured Claude Code shell.
-func (a *Account) ResolveClaudeCodeRouteModel(shellModel string) (string, bool) {
+// ResolveClaudeCodeRoute resolves an explicitly configured Claude Code shell.
+func (a *Account) ResolveClaudeCodeRoute(shellModel string) (ClaudeCodeRoute, bool) {
 	shellModel = strings.TrimSpace(shellModel)
 	if shellModel == "" {
-		return "", false
+		return ClaudeCodeRoute{}, false
 	}
 	for _, route := range a.GetClaudeCodeRoutes() {
 		if route.ShellModel == shellModel {
-			return route.UpstreamModel, true
+			return route, true
 		}
 	}
-	return "", false
+	return ClaudeCodeRoute{}, false
+}
+
+// ResolveClaudeCodeRouteModel returns the upstream model for a configured shell.
+func (a *Account) ResolveClaudeCodeRouteModel(shellModel string) (string, bool) {
+	route, matched := a.ResolveClaudeCodeRoute(shellModel)
+	if !matched {
+		return "", false
+	}
+	return route.UpstreamModel, true
 }
 
 func (a *Account) GetClaudeCodeModelCatalog() []ClaudeCodeModelCatalogEntry {

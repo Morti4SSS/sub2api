@@ -1009,10 +1009,8 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		if apiKey != nil {
 			group = apiKey.Group
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   service.ClaudeCodeModelsForGroup(group),
-		})
+		catalog := h.gatewayService.GetStableClaudeCodeModelCatalog(c.Request.Context(), group)
+		writeClaudeCodeCatalogModelsList(c, catalog)
 		return
 	}
 
@@ -1088,7 +1086,9 @@ func writeClaudeCodeCatalogModelsList(c *gin.Context, catalog []service.ClaudeCo
 			CreatedAt:    "2024-01-01T00:00:00Z",
 			Capabilities: entry.Capabilities,
 		}
-		if entry.Supports1M {
+		if entry.ContextWindow > 0 {
+			model.Metadata = map[string]any{"context_window": entry.ContextWindow}
+		} else if entry.Supports1M {
 			model.Metadata = map[string]any{"context_window": 1000000}
 		}
 		models = append(models, model)

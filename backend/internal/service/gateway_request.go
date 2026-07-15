@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -1209,6 +1210,14 @@ func ApplyClaudeCodeEffortMapping(body []byte, account *Account, requestModel st
 	if account == nil || account.Extra == nil || strings.TrimSpace(requestModel) == "" {
 		return body, false
 	}
+	if _, hasRoutesOwner := account.Extra["claude_code_routes"]; hasRoutesOwner {
+		route, matched := account.ResolveClaudeCodeRoute(requestModel)
+		if !matched {
+			return body, false
+		}
+		return applyClaudeCodeRouteThinking(body, route.Thinking)
+	}
+
 	rawConfig, ok := account.Extra["claude_code_effort_mapping"].(map[string]any)
 	if !ok {
 		return body, false
@@ -1236,23 +1245,7 @@ func ApplyClaudeCodeEffortMapping(body []byte, account *Account, requestModel st
 	if mapped == "" {
 		return body, false
 	}
-	if targetField == "thinking.budget_tokens" {
-		budget, err := strconv.Atoi(mapped)
-		if err != nil {
-			return body, false
-		}
-		modified, err := sjson.SetBytes(body, targetField, budget)
-		if err != nil {
-			return body, false
-		}
-		modified, err = sjson.SetBytes(modified, "thinking.type", "enabled")
-		return modified, err == nil
-	}
-	modified, err := sjson.SetBytes(body, targetField, mapped)
-	if err != nil {
-		return body, false
-	}
-	return modified, true
+	return writeClaudeCodeMappedEffort(body, targetField, mapped)
 }
 
 func claudeCodeEffortForMapping(body []byte, values map[string]any) (string, bool) {
@@ -1261,12 +1254,87 @@ func claudeCodeEffortForMapping(body []byte, values map[string]any) (string, boo
 			return *effort, true
 		}
 	}
-	for _, effort := range []string{"max", "xhigh", "high", "medium", "low"} {
-		if claudeCodeEffortStringValue(values[effort]) != "" {
-			return effort, true
+	return "", false
+}
+
+func applyClaudeCodeRouteThinking(body []byte, thinking map[string]any) ([]byte, bool) {
+	if len(thinking) == 0 {
+		return body, false
+	}
+	mode := claudeCodeEffortStringValue(thinking["mode"])
+	if mode != "levels" && mode != "budget" {
+		return body, false
+	}
+	effort := NormalizeClaudeOutputEffort(gjson.GetBytes(body, "output_config.effort").String())
+	if effort == nil {
+		return body, false
+	}
+	targetField := claudeCodeEffortStringValue(thinking["target_field"])
+	if !allowedClaudeCodeEffortTargetField(targetField) {
+		return body, false
+	}
+	if (mode == "budget") != (targetField == "thinking.budget_tokens") {
+		return body, false
+	}
+
+	mapped := ""
+	if overrides, ok := thinking["overrides"].(map[string]any); ok {
+		mapped = claudeCodeEffortStringValue(overrides[*effort])
+	}
+	if mapped == "" {
+		levels := extraStringSliceValue(thinking["levels"])
+		if len(levels) == 0 {
+			return body, false
+		}
+		sourceIndex := -1
+		for index, level := range claude.EffortLevels {
+			if level == *effort {
+				sourceIndex = index
+				break
+			}
+		}
+		if sourceIndex < 0 {
+			return body, false
+		}
+		targetIndex := int(math.Round(float64(sourceIndex*(len(levels)-1)) / float64(len(claude.EffortLevels)-1)))
+		mapped = levels[targetIndex]
+	}
+	return writeClaudeCodeMappedEffort(body, targetField, mapped)
+}
+
+func writeClaudeCodeMappedEffort(body []byte, targetField string, mapped string) ([]byte, bool) {
+	var value any = mapped
+	if targetField == "thinking.budget_tokens" {
+		budget, err := strconv.ParseInt(mapped, 10, 64)
+		if err != nil || budget <= 0 {
+			return body, false
+		}
+		value = budget
+	}
+	modified, err := sjson.SetBytes(body, targetField, value)
+	if err != nil {
+		return body, false
+	}
+	if targetField == "thinking.budget_tokens" {
+		modified, err = sjson.SetBytes(modified, "thinking.type", "enabled")
+		if err != nil {
+			return body, false
 		}
 	}
-	return "", false
+	if targetField != "output_config.effort" {
+		modified, err = sjson.DeleteBytes(modified, "output_config.effort")
+		if err != nil {
+			return body, false
+		}
+		outputConfig := gjson.GetBytes(modified, "output_config")
+		if outputConfig.Exists() && outputConfig.IsObject() && len(outputConfig.Map()) == 0 {
+			modified, err = sjson.DeleteBytes(modified, "output_config")
+			if err != nil {
+				return body, false
+			}
+		}
+	}
+	return modified, true
 }
 
 func claudeCodeEffortStringValue(raw any) string {

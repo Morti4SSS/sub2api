@@ -172,6 +172,9 @@ var DefaultModels = []Model{
 	},
 }
 
+// EffortLevels is the Claude Code source scale used by account thinking mappings.
+var EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
 // DefaultModelIDs 返回默认模型的 ID 列表
 func DefaultModelIDs() []string {
 	ids := make([]string, len(DefaultModels))
