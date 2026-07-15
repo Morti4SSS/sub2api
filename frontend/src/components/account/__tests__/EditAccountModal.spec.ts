@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
@@ -166,6 +166,27 @@ function buildAccount() {
   } as any
 }
 
+function buildAnthropicAPIKeyAccount() {
+  return {
+    ...buildAccount(),
+    id: 6,
+    name: 'Anthropic relay key',
+    platform: 'anthropic',
+    credentials: {
+      api_key: 'sk-ant-test',
+      base_url: 'https://relay.example.com'
+    },
+    extra: {
+      upstream_models_url: 'https://relay.example.com/old-catalog',
+      claude_code_routes: [{
+        shell_model: 'claude-opus-4-8',
+        upstream_model: 'glm-5.2',
+        display_name: 'Strong model route'
+      }]
+    }
+  } as any
+}
+
 function buildOpenAISparkShadowAccount() {
   const account = buildAccount()
   return {
@@ -302,6 +323,33 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+  })
+
+  it('loads and saves the account-owned upstream model list URL', async () => {
+    const account = buildAnthropicAPIKeyAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+    const wrapper = mountModal(account)
+
+    const mappingButton = wrapper.findAll('button').find(button =>
+      button.text().includes('admin.accounts.modelMapping')
+    )
+    expect(mappingButton).toBeDefined()
+    await mappingButton!.trigger('click')
+    await flushPromises()
+
+    const modelsURL = wrapper.get('[data-testid="claude-code-models-url"]')
+    expect((modelsURL.element as HTMLInputElement).value).toBe('https://relay.example.com/old-catalog')
+    await modelsURL.setValue(' https://relay.example.com/new-catalog ')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.upstream_models_url).toBe(
+      'https://relay.example.com/new-catalog'
+    )
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {

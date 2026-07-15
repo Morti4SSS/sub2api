@@ -1201,6 +1201,13 @@
 
             <!-- Mapping Mode -->
             <div v-else>
+              <ClaudeCodeConfigEditor
+                v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
+                v-model:routes="claudeCodeRoutes"
+                v-model:upstream-models-url="upstreamModelsUrl"
+                :sync-credentials="syncPreviewCredentials"
+              />
+              <template v-else>
               <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
                 <p class="text-xs text-purple-700 dark:text-purple-400">
                   <svg
@@ -1302,6 +1309,7 @@
                   + {{ preset.label }}
                 </button>
               </div>
+              </template>
             </div>
           </template>
         </div>
@@ -2795,12 +2803,6 @@
         </div>
       </div>
 
-      <ClaudeCodeConfigEditor
-        v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
-        v-model:catalog="claudeCodeCatalog"
-        v-model:effort-mappings="claudeCodeEffortMappings"
-      />
-
       <!-- OpenAI OAuth Codex 官方客户端限制开关 -->
       <div
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
@@ -3460,11 +3462,10 @@ import {
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
 import ClaudeCodeConfigEditor from './ClaudeCodeConfigEditor.vue'
 import {
-  createEmptyClaudeCodeCatalogEntry,
-  createEmptyClaudeCodeEffortEntry,
-  writeClaudeCodeConfigToExtra,
-  type ClaudeCodeCatalogForm,
-  type ClaudeCodeEffortForm
+  createEmptyClaudeCodeRoute,
+  writeClaudeCodeRoutesToExtra,
+  writeUpstreamModelsURLToExtra,
+  type ClaudeCodeRouteForm
 } from './claudeCodeConfig'
 
 // Type for exposed OAuthAuthorizationFlow component
@@ -3585,6 +3586,7 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const upstreamModelsUrl = ref('')
 
 const syncPreviewCredentials = computed(() => {
   if (!apiKeyValue.value) return undefined
@@ -3592,7 +3594,8 @@ const syncPreviewCredentials = computed(() => {
     platform: form.platform,
     type: form.type,
     base_url: apiKeyBaseUrl.value || undefined,
-    api_key: apiKeyValue.value
+    api_key: apiKeyValue.value,
+    upstream_models_url: upstreamModelsUrl.value.trim() || undefined
   }
 })
 
@@ -3674,8 +3677,7 @@ const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
-const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
-const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
+const claudeCodeRoutes = ref<ClaudeCodeRouteForm[]>([createEmptyClaudeCodeRoute()])
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -4488,6 +4490,7 @@ const resetForm = () => {
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  upstreamModelsUrl.value = ''
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
   editQuotaWeeklyLimit.value = null
@@ -4528,8 +4531,7 @@ const resetForm = () => {
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
-  claudeCodeCatalog.value = [createEmptyClaudeCodeCatalogEntry()]
-  claudeCodeEffortMappings.value = [createEmptyClaudeCodeEffortEntry()]
+  claudeCodeRoutes.value = [createEmptyClaudeCodeRoute()]
   // Reset quota control state
   windowCostEnabled.value = false
   windowCostLimit.value = null
@@ -4658,7 +4660,8 @@ const buildAnthropicExtra = (base?: Record<string, unknown>): Record<string, unk
   } else {
     extra.web_search_emulation = webSearchEmulationMode.value
   }
-  writeClaudeCodeConfigToExtra(extra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
+  writeClaudeCodeRoutesToExtra(extra, claudeCodeRoutes.value)
+  writeUpstreamModelsURLToExtra(extra, upstreamModelsUrl.value)
 
   return Object.keys(extra).length > 0 ? extra : undefined
 }

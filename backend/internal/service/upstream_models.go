@@ -1,11 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -30,9 +33,13 @@ const (
 
 // UpstreamModelSyncError keeps internal failure details wrapped while exposing a safe client message.
 type UpstreamModelSyncError struct {
-	Kind    UpstreamModelSyncErrorKind
-	Message string
-	Err     error
+	Kind          UpstreamModelSyncErrorKind
+	Message       string
+	Err           error
+	HTTPStatus    int
+	RequestURL    string
+	ContentType   string
+	ResponseShape string
 }
 
 func (e *UpstreamModelSyncError) Error() string {
@@ -58,6 +65,30 @@ func (e *UpstreamModelSyncError) SafeMessage() string {
 		return "Failed to sync upstream models"
 	}
 	return e.Message
+}
+
+// SafeMetadata returns only controlled diagnostics and never includes response bodies or credentials.
+func (e *UpstreamModelSyncError) SafeMetadata() map[string]string {
+	if e == nil {
+		return nil
+	}
+	metadata := make(map[string]string, 4)
+	if e.RequestURL != "" {
+		metadata["request_url"] = e.RequestURL
+	}
+	if e.HTTPStatus != 0 {
+		metadata["http_status"] = fmt.Sprintf("%d", e.HTTPStatus)
+	}
+	if e.ContentType != "" {
+		metadata["content_type"] = e.ContentType
+	}
+	if e.ResponseShape != "" {
+		metadata["response_shape"] = e.ResponseShape
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }
 
 func newUpstreamModelSyncConfigError(message string, err error) error {
@@ -95,33 +126,78 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	}
 
 	proxyURL := upstreamModelsProxyURL(account)
+	requestURL := redactUpstreamModelsURL(req.URL)
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
+		return nil, &UpstreamModelSyncError{
+			Kind:       UpstreamModelSyncErrorUpstream,
+			Message:    "Failed to request upstream model list",
+			Err:        err,
+			RequestURL: requestURL,
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
+	contentType := upstreamModelsContentType(resp.Header.Get("Content-Type"))
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, upstreamModelsBodyLimit+1))
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to read upstream model list", err)
+		return nil, &UpstreamModelSyncError{
+			Kind:        UpstreamModelSyncErrorUpstream,
+			Message:     "Failed to read upstream model list",
+			Err:         err,
+			HTTPStatus:  resp.StatusCode,
+			RequestURL:  requestURL,
+			ContentType: contentType,
+		}
 	}
 	if int64(len(body)) > upstreamModelsBodyLimit {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response is too large", fmt.Errorf("response exceeds %d bytes", upstreamModelsBodyLimit))
+		return nil, &UpstreamModelSyncError{
+			Kind:          UpstreamModelSyncErrorUpstream,
+			Message:       "Upstream model list response is too large",
+			Err:           fmt.Errorf("response exceeds %d bytes", upstreamModelsBodyLimit),
+			HTTPStatus:    resp.StatusCode,
+			RequestURL:    requestURL,
+			ContentType:   contentType,
+			ResponseShape: "too-large",
+		}
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newUpstreamModelSyncUpstreamError(
-			fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode),
-			fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
-		)
+		return nil, &UpstreamModelSyncError{
+			Kind:          UpstreamModelSyncErrorUpstream,
+			Message:       fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode),
+			Err:           fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
+			HTTPStatus:    resp.StatusCode,
+			RequestURL:    requestURL,
+			ContentType:   contentType,
+			ResponseShape: classifyUpstreamModelsResponse(body, contentType),
+		}
 	}
 
-	models, err := extractUpstreamModelIDs(body)
+	models, responseShape, err := extractUpstreamModelIDsWithShape(body)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+		if contentType == "text/html" {
+			responseShape = "html"
+		}
+		return nil, &UpstreamModelSyncError{
+			Kind:          UpstreamModelSyncErrorUpstream,
+			Message:       "Upstream model list response was not a supported JSON model catalog",
+			Err:           err,
+			HTTPStatus:    resp.StatusCode,
+			RequestURL:    requestURL,
+			ContentType:   contentType,
+			ResponseShape: responseShape,
+		}
 	}
 	if len(models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+		return nil, &UpstreamModelSyncError{
+			Kind:          UpstreamModelSyncErrorUpstream,
+			Message:       "Upstream returned no supported models",
+			HTTPStatus:    resp.StatusCode,
+			RequestURL:    requestURL,
+			ContentType:   contentType,
+			ResponseShape: responseShape,
+		}
 	}
 
 	return models, nil
@@ -189,11 +265,11 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 		)
 	}
 
-	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	modelsURL, err := s.resolveUpstreamModelsURL(account, buildV1ModelsURL(baseURL))
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Anthropic base URL", err)
+		return nil, newUpstreamModelSyncConfigError("Invalid Anthropic model list URL", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildV1ModelsURL(normalizedBaseURL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Anthropic model list URL", err)
 	}
@@ -234,12 +310,12 @@ func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Con
 			nil,
 		)
 	}
-	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	modelsURL, err := s.resolveUpstreamModelsURL(account, buildV1ModelsURL(baseURL))
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Antigravity base URL", err)
+		return nil, newUpstreamModelSyncConfigError("Invalid Antigravity model list URL", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildV1ModelsURL(normalizedBaseURL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Antigravity model list URL", err)
 	}
@@ -268,12 +344,12 @@ func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Contex
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "https://api.openai.com"
 	}
-	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	modelsURL, err := s.resolveUpstreamModelsURL(account, buildOpenAIModelsURL(baseURL))
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI base URL", err)
+		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI model list URL", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(normalizedBaseURL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI model list URL", err)
 	}
@@ -289,12 +365,12 @@ func (s *AccountTestService) buildGeminiUpstreamModelsRequest(ctx context.Contex
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = geminicli.AIStudioBaseURL
 	}
-	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	modelsURL, err := s.resolveUpstreamModelsURL(account, buildGeminiModelsURL(baseURL))
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid Gemini base URL", err)
+		return nil, newUpstreamModelSyncConfigError("Invalid Gemini model list URL", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildGeminiModelsURL(normalizedBaseURL), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Gemini model list URL", err)
 	}
@@ -379,6 +455,37 @@ func upstreamModelsProxyURL(account *Account) string {
 	return ""
 }
 
+func (s *AccountTestService) resolveUpstreamModelsURL(account *Account, fallback string) (string, error) {
+	modelsURL := fallback
+	if account != nil && account.Extra != nil {
+		if customURL, ok := account.Extra["upstream_models_url"].(string); ok && strings.TrimSpace(customURL) != "" {
+			modelsURL = strings.TrimSpace(customURL)
+		}
+	}
+	return s.validateUpstreamBaseURL(modelsURL)
+}
+
+func redactUpstreamModelsURL(requestURL *url.URL) string {
+	if requestURL == nil {
+		return ""
+	}
+	redacted := *requestURL
+	redacted.User = nil
+	redacted.RawQuery = ""
+	redacted.ForceQuery = false
+	redacted.Fragment = ""
+	redacted.RawFragment = ""
+	return redacted.String()
+}
+
+func upstreamModelsContentType(raw string) string {
+	mediaType, _, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(mediaType)
+}
+
 func buildV1ModelsURL(base string) string {
 	normalized := strings.TrimRight(strings.TrimSpace(base), "/")
 	if strings.HasSuffix(normalized, "/v1/models") {
@@ -406,45 +513,92 @@ func buildGeminiModelsURL(base string) string {
 }
 
 type upstreamModelEntry struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Model string `json:"model"`
 }
 
 func extractUpstreamModelIDs(body []byte) ([]string, error) {
-	var response struct {
-		Data   []upstreamModelEntry `json:"data"`
-		Models []upstreamModelEntry `json:"models"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		var arrayResponse []upstreamModelEntry
-		if arrayErr := json.Unmarshal(body, &arrayResponse); arrayErr != nil {
-			return nil, fmt.Errorf("parse upstream model list: %w", err)
-		}
+	models, _, err := extractUpstreamModelIDsWithShape(body)
+	return models, err
+}
 
-		models := make([]string, 0, len(arrayResponse))
-		for _, entry := range arrayResponse {
+func extractUpstreamModelIDsWithShape(body []byte) ([]string, string, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return nil, "empty", fmt.Errorf("parse upstream model list: empty response")
+	}
+
+	if trimmed[0] == '[' {
+		models, err := extractUpstreamModelArray(trimmed)
+		return models, "array", err
+	}
+	if trimmed[0] != '{' {
+		var value any
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			return nil, "invalid-json", fmt.Errorf("parse upstream model list: %w", err)
+		}
+		return nil, "json-scalar", fmt.Errorf("upstream model list must be an array or object")
+	}
+
+	var response struct {
+		Data   json.RawMessage `json:"data"`
+		Models json.RawMessage `json:"models"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(trimmed, &response); err != nil {
+		return nil, "invalid-json", fmt.Errorf("parse upstream model list: %w", err)
+	}
+
+	candidates := []json.RawMessage{response.Data, response.Models}
+	if len(response.Result) > 0 && !bytes.Equal(bytes.TrimSpace(response.Result), []byte("null")) {
+		var result struct {
+			Data   json.RawMessage `json:"data"`
+			Models json.RawMessage `json:"models"`
+		}
+		if err := json.Unmarshal(response.Result, &result); err == nil {
+			candidates = append(candidates, result.Data, result.Models)
+		}
+	}
+
+	foundArray := false
+	models := make([]string, 0)
+	for _, candidate := range candidates {
+		candidate = bytes.TrimSpace(candidate)
+		if len(candidate) == 0 || candidate[0] != '[' {
+			continue
+		}
+		foundArray = true
+		entries, err := extractUpstreamModelArray(candidate)
+		if err != nil {
+			return nil, "object-with-model-array", err
+		}
+		models = append(models, entries...)
+	}
+	if !foundArray {
+		return nil, "object-without-model-array", fmt.Errorf("upstream object does not contain a supported model array")
+	}
+	return dedupeAndSortModelIDs(models), "object-with-model-array", nil
+}
+
+func extractUpstreamModelArray(raw []byte) ([]string, error) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("parse upstream model array: %w", err)
+	}
+
+	models := make([]string, 0, len(entries))
+	for _, rawEntry := range entries {
+		var modelID string
+		if err := json.Unmarshal(rawEntry, &modelID); err == nil {
+			models = append(models, strings.TrimPrefix(strings.TrimSpace(modelID), "models/"))
+			continue
+		}
+		var entry upstreamModelEntry
+		if err := json.Unmarshal(rawEntry, &entry); err == nil {
 			models = append(models, upstreamModelEntryID(entry))
 		}
-		return dedupeAndSortModelIDs(models), nil
 	}
-
-	models := make([]string, 0, len(response.Data)+len(response.Models))
-	for _, entry := range response.Data {
-		models = append(models, upstreamModelEntryID(entry))
-	}
-	for _, entry := range response.Models {
-		models = append(models, upstreamModelEntryID(entry))
-	}
-
-	if len(models) == 0 {
-		var arrayResponse []upstreamModelEntry
-		if err := json.Unmarshal(body, &arrayResponse); err == nil {
-			for _, entry := range arrayResponse {
-				models = append(models, upstreamModelEntryID(entry))
-			}
-		}
-	}
-
 	return dedupeAndSortModelIDs(models), nil
 }
 
@@ -453,7 +607,18 @@ func upstreamModelEntryID(entry upstreamModelEntry) string {
 	if modelID == "" {
 		modelID = strings.TrimSpace(entry.Name)
 	}
+	if modelID == "" {
+		modelID = strings.TrimSpace(entry.Model)
+	}
 	return strings.TrimPrefix(modelID, "models/")
+}
+
+func classifyUpstreamModelsResponse(body []byte, contentType string) string {
+	if contentType == "text/html" {
+		return "html"
+	}
+	_, shape, _ := extractUpstreamModelIDsWithShape(body)
+	return shape
 }
 
 func dedupeAndSortModelIDs(models []string) []string {

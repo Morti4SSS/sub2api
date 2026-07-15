@@ -474,6 +474,21 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
+export interface ClaudeCodeConfigOptions {
+  models: Array<{
+    id: string
+    type: string
+    display_name: string
+    created_at: string
+  }>
+  effort_levels: string[]
+}
+
+export async function getClaudeCodeOptions(): Promise<ClaudeCodeConfigOptions> {
+  const { data } = await apiClient.get<ClaudeCodeConfigOptions>('/admin/accounts/claude-code/options')
+  return data
+}
+
 export interface SyncUpstreamModelsResult {
   models: string[]
 }
@@ -483,8 +498,9 @@ export interface SyncUpstreamModelsResult {
  * @param id - Account ID
  * @returns List of model IDs returned by the upstream
  */
-export async function syncUpstreamModels(id: number): Promise<SyncUpstreamModelsResult> {
-  const { data } = await apiClient.post<SyncUpstreamModelsResult>(`/admin/accounts/${id}/models/sync-upstream`)
+export async function syncUpstreamModels(id: number, upstreamModelsUrl?: string): Promise<SyncUpstreamModelsResult> {
+  const payload = upstreamModelsUrl === undefined ? undefined : { upstream_models_url: upstreamModelsUrl }
+  const { data } = await apiClient.post<SyncUpstreamModelsResult>(`/admin/accounts/${id}/models/sync-upstream`, payload)
   return data
 }
 
@@ -493,6 +509,7 @@ export interface SyncUpstreamPreviewParams {
   type: string
   base_url?: string
   api_key: string
+  upstream_models_url?: string
 }
 
 /**

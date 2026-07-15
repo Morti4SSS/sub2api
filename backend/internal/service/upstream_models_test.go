@@ -115,6 +115,11 @@ func TestExtractUpstreamModelIDs(t *testing.T) {
 			body: `[{"id":"z-model"},{"name":"models/a-model"}]`,
 			want: []string{"a-model", "z-model"},
 		},
+		{
+			name: "nested result data with strings and model field",
+			body: `{"result":{"data":["plain-model",{"model":"nested-model"}]}}`,
+			want: []string{"nested-model", "plain-model"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -200,6 +205,26 @@ func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://gateway.example.com/antigravity/v1/models", antigravityReq.URL.String())
 	require.Equal(t, "antigravity-key", antigravityReq.Header.Get("x-api-key"))
+}
+
+func TestBuildUpstreamModelsRequestUsesCustomFullURL(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
+	req, err := svc.buildOpenAIUpstreamModelsRequest(context.Background(), &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "openai-key",
+			"base_url": "https://openai.example.com/v1",
+		},
+		Extra: map[string]any{
+			"upstream_models_url": "https://relay.example.com/custom/catalog?tenant=secret",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example.com/custom/catalog?tenant=secret", req.URL.String())
 }
 
 func TestBuildAntigravityAPIKeyModelsRequestRejectsOfficialCloudCodeBase(t *testing.T) {
@@ -295,4 +320,95 @@ func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {
 	require.Equal(t, UpstreamModelSyncErrorUpstream, syncErr.Kind)
 	require.NotContains(t, syncErr.SafeMessage(), "SECRET_TOKEN")
 	require.Contains(t, syncErr.SafeMessage(), "HTTP 502")
+}
+
+func TestFetchUpstreamSupportedModelsReturnsRedactedHTTPDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
+		status := status
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: status,
+				Header:     http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":"SECRET_RESPONSE"}`)),
+			}}
+			svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+
+			_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+				ID: 9, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"api_key": "openai-key", "base_url": "https://openai.example.com/v1"},
+				Extra:       map[string]any{"upstream_models_url": "https://relay.example.com/custom/catalog?token=SECRET_QUERY"},
+			})
+
+			var syncErr *UpstreamModelSyncError
+			require.ErrorAs(t, err, &syncErr)
+			require.Equal(t, status, syncErr.HTTPStatus)
+			require.Equal(t, "https://relay.example.com/custom/catalog", syncErr.RequestURL)
+			require.Equal(t, "application/json", syncErr.ContentType)
+			require.NotContains(t, syncErr.SafeMessage(), "SECRET")
+			require.NotContains(t, syncErr.SafeMetadata()["request_url"], "SECRET")
+		})
+	}
+}
+
+func TestFetchUpstreamSupportedModelsClassifiesHTMLAndUnsupportedJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		wantShape   string
+	}{
+		{name: "cloudflare html", contentType: "text/html", body: `<html>SECRET_CHALLENGE</html>`, wantShape: "html"},
+		{name: "unsupported json object", contentType: "application/json", body: `{"object":"list","items":[]}`, wantShape: "object-without-model-array"},
+		{name: "empty array", contentType: "application/json", body: `[]`, wantShape: "array"},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{test.contentType}},
+				Body:       io.NopCloser(strings.NewReader(test.body)),
+			}}
+			svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+
+			_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+				ID: 10, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"api_key": "openai-key", "base_url": "https://openai.example.com/v1"},
+			})
+
+			var syncErr *UpstreamModelSyncError
+			require.ErrorAs(t, err, &syncErr)
+			require.Equal(t, test.wantShape, syncErr.ResponseShape)
+			require.NotContains(t, syncErr.SafeMessage(), "SECRET")
+		})
+	}
+}
+
+func TestFetchUpstreamSupportedModelsRejectsOversizedResponseWithDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", int(upstreamModelsBodyLimit+1)))),
+	}}
+	svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+
+	_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+		ID: 11, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "openai-key", "base_url": "https://openai.example.com/v1"},
+	})
+
+	var syncErr *UpstreamModelSyncError
+	require.ErrorAs(t, err, &syncErr)
+	require.Equal(t, http.StatusOK, syncErr.HTTPStatus)
+	require.Equal(t, "application/json", syncErr.ContentType)
+	require.Equal(t, "too-large", syncErr.ResponseShape)
 }

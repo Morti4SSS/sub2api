@@ -150,6 +150,13 @@
 
             <!-- Mapping Mode -->
             <div v-else>
+              <ClaudeCodeConfigEditor
+                v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
+                v-model:routes="claudeCodeRoutes"
+                v-model:upstream-models-url="upstreamModelsUrl"
+                :account-id="account.id"
+              />
+              <template v-else>
               <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
                 <p class="text-xs text-purple-700 dark:text-purple-400">
                   <svg
@@ -251,6 +258,7 @@
                   + {{ preset.label }}
                 </button>
               </div>
+              </template>
             </div>
           </template>
         </div>
@@ -1679,12 +1687,6 @@
         </div>
       </div>
 
-      <ClaudeCodeConfigEditor
-        v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
-        v-model:catalog="claudeCodeCatalog"
-        v-model:effort-mappings="claudeCodeEffortMappings"
-      />
-
       <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'apikey' || account?.type === 'bedrock')"
@@ -2543,13 +2545,12 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import ClaudeCodeConfigEditor from './ClaudeCodeConfigEditor.vue'
 import {
-  createEmptyClaudeCodeCatalogEntry,
-  createEmptyClaudeCodeEffortEntry,
-  readClaudeCodeCatalog,
-  readClaudeCodeEffortMappings,
-  writeClaudeCodeConfigToExtra,
-  type ClaudeCodeCatalogForm,
-  type ClaudeCodeEffortForm
+  createEmptyClaudeCodeRoute,
+  readClaudeCodeRoutes,
+  readUpstreamModelsURL,
+  writeClaudeCodeRoutesToExtra,
+  writeUpstreamModelsURLToExtra,
+  type ClaudeCodeRouteForm
 } from './claudeCodeConfig'
 import {
   applyAntigravityProjectID,
@@ -2787,8 +2788,8 @@ const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
-const claudeCodeCatalog = ref<ClaudeCodeCatalogForm[]>([createEmptyClaudeCodeCatalogEntry()])
-const claudeCodeEffortMappings = ref<ClaudeCodeEffortForm[]>([createEmptyClaudeCodeEffortEntry()])
+const claudeCodeRoutes = ref<ClaudeCodeRouteForm[]>([createEmptyClaudeCodeRoute()])
+const upstreamModelsUrl = ref('')
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -3213,8 +3214,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
-  claudeCodeCatalog.value = [createEmptyClaudeCodeCatalogEntry()]
-  claudeCodeEffortMappings.value = [createEmptyClaudeCodeEffortEntry()]
+  claudeCodeRoutes.value = [createEmptyClaudeCodeRoute()]
+  upstreamModelsUrl.value = ''
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'setup-token' || newAccount.type === 'apikey')) {
     openaiPassthroughEnabled.value = extra?.openai_passthrough === true || extra?.openai_oauth_passthrough === true
     openAICompactMode.value = (extra?.openai_compact_mode as OpenAICompactMode) || 'auto'
@@ -3261,8 +3262,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     }
   }
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
-    claudeCodeCatalog.value = readClaudeCodeCatalog(extra)
-    claudeCodeEffortMappings.value = readClaudeCodeEffortMappings(extra)
+    claudeCodeRoutes.value = readClaudeCodeRoutes(extra)
+    upstreamModelsUrl.value = readUpstreamModelsURL(extra)
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
     anthropicAPIKeyAuthScheme.value = extra?.anthropic_apikey_auth_scheme === 'authorization_bearer'
       ? 'authorization_bearer'
@@ -4350,7 +4351,8 @@ const handleSubmit = async () => {
       } else {
         newExtra.web_search_emulation = webSearchEmulationMode.value
       }
-      writeClaudeCodeConfigToExtra(newExtra, claudeCodeCatalog.value, claudeCodeEffortMappings.value)
+      writeClaudeCodeRoutesToExtra(newExtra, claudeCodeRoutes.value)
+      writeUpstreamModelsURLToExtra(newExtra, upstreamModelsUrl.value)
       updatePayload.extra = newExtra
     }
 

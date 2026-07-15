@@ -2236,6 +2236,14 @@ func (h *AccountHandler) SetSchedulable(c *gin.Context) {
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
+// GetClaudeCodeOptions returns the canonical shell catalog and source effort scale.
+func (h *AccountHandler) GetClaudeCodeOptions(c *gin.Context) {
+	response.Success(c, gin.H{
+		"models":        claude.DefaultModels,
+		"effort_levels": claude.EffortLevels,
+	})
+}
+
 // GetAvailableModels handles getting available models for an account
 // GET /api/v1/admin/accounts/:id/models
 func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
@@ -2444,6 +2452,28 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		response.InternalError(c, "Account test service is not configured")
 		return
 	}
+	var req struct {
+		ModelsURL *string `json:"upstream_models_url"`
+	}
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, "Invalid request: "+err.Error())
+			return
+		}
+	}
+	if req.ModelsURL != nil {
+		accountCopy := *account
+		accountCopy.Extra = make(map[string]any, len(account.Extra)+1)
+		for key, value := range account.Extra {
+			accountCopy.Extra[key] = value
+		}
+		if strings.TrimSpace(*req.ModelsURL) == "" {
+			delete(accountCopy.Extra, "upstream_models_url")
+		} else {
+			accountCopy.Extra["upstream_models_url"] = strings.TrimSpace(*req.ModelsURL)
+		}
+		account = &accountCopy
+	}
 
 	models, err := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), account)
 	if err != nil {
@@ -2451,10 +2481,10 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		if errors.As(err, &syncErr) {
 			switch syncErr.Kind {
 			case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
-				response.BadRequest(c, syncErr.SafeMessage())
+				response.ErrorWithDetails(c, http.StatusBadRequest, syncErr.SafeMessage(), string(syncErr.Kind), syncErr.SafeMetadata())
 			default:
 				slog.Warn("sync_upstream_models_failed", "account_id", accountID, "kind", syncErr.Kind)
-				response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+				response.ErrorWithDetails(c, http.StatusBadGateway, syncErr.SafeMessage(), string(syncErr.Kind), syncErr.SafeMetadata())
 			}
 			return
 		}
@@ -2471,10 +2501,11 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 // POST /api/v1/admin/accounts/models/sync-upstream-preview
 func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 	var req struct {
-		Platform string `json:"platform" binding:"required"`
-		Type     string `json:"type" binding:"required"`
-		BaseURL  string `json:"base_url"`
-		APIKey   string `json:"api_key" binding:"required"`
+		Platform  string `json:"platform" binding:"required"`
+		Type      string `json:"type" binding:"required"`
+		BaseURL   string `json:"base_url"`
+		APIKey    string `json:"api_key" binding:"required"`
+		ModelsURL string `json:"upstream_models_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
@@ -2488,6 +2519,7 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 			"api_key":  req.APIKey,
 			"base_url": req.BaseURL,
 		},
+		Extra: map[string]any{"upstream_models_url": req.ModelsURL},
 	}
 
 	if h.accountTestService == nil {
@@ -2501,10 +2533,10 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 		if errors.As(err, &syncErr) {
 			switch syncErr.Kind {
 			case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
-				response.BadRequest(c, syncErr.SafeMessage())
+				response.ErrorWithDetails(c, http.StatusBadRequest, syncErr.SafeMessage(), string(syncErr.Kind), syncErr.SafeMetadata())
 			default:
 				slog.Warn("sync_upstream_models_preview_failed", "platform", req.Platform, "kind", syncErr.Kind)
-				response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+				response.ErrorWithDetails(c, http.StatusBadGateway, syncErr.SafeMessage(), string(syncErr.Kind), syncErr.SafeMetadata())
 			}
 			return
 		}
