@@ -160,3 +160,92 @@ func TestAccountTestServiceOpenAIUsesFixedProductionGatewayAndCodexIdentity(t *t
 	require.Contains(t, recorder.Body.String(), `"upstream_http_status":200`)
 	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
+
+func TestAccountTestServiceClaudeReportsSanitizedUpstreamModelNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := &Account{
+		ID:          303,
+		Name:        "Claude relay failure",
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test-key", "base_url": "https://relay.example.com"},
+		Extra: map[string]any{
+			"anthropic_passthrough": true,
+			"claude_code_routes": []any{map[string]any{
+				"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
+			}},
+		},
+	}
+	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"model_not_found","message":"model glm-5.2 not found; api_key=relay-secret"}}`)),
+	}}
+	gateway := &GatewayService{
+		accountRepo:         repo,
+		httpUpstream:        upstream,
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	svc := &AccountTestService{accountRepo: repo, gatewayService: gateway}
+	c, recorder := newTestContext()
+
+	err := svc.TestAccountConnection(c, account.ID, "claude-opus-4-8", "Explain whether this connection is working.", AccountTestModeDefault)
+
+	require.Error(t, err)
+	body := recorder.Body.String()
+	require.Contains(t, body, `"type":"diagnostics"`)
+	require.Contains(t, body, `"upstream_model":"glm-5.2"`)
+	require.Contains(t, body, `"upstream_http_status":404`)
+	require.Contains(t, body, `"upstream_error_code":"upstream_model_not_found"`)
+	require.Contains(t, body, `"upstream_error_reason":"model glm-5.2 not found; api_key=***"`)
+	require.NotContains(t, body, "relay-secret")
+}
+
+func TestAccountTestServiceOpenAIReportsSanitizedUpstreamError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := &Account{
+		ID:          304,
+		Name:        "OpenAI relay failure",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{"api_key": "test-key", "base_url": "https://openai-relay.example.com/v1"},
+		Extra:       map[string]any{"openai_passthrough": true},
+	}
+	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusServiceUnavailable,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"relay temporarily unavailable; token=relay-secret"}}`)),
+	}}
+	openAIGateway := &OpenAIGatewayService{
+		accountRepo:      repo,
+		httpUpstream:     upstream,
+		cfg:              &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		codexDetector:    NewOpenAICodexClientRestrictionDetector(nil),
+		openaiWSResolver: NewOpenAIWSProtocolResolver(nil),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	svc := &AccountTestService{accountRepo: repo, openAIGatewayService: openAIGateway}
+	c, recorder := newTestContext()
+
+	err := svc.TestAccountConnection(c, account.ID, "gpt-5.4", "Explain whether this connection is working.", AccountTestModeDefault)
+
+	require.Error(t, err)
+	body := recorder.Body.String()
+	require.Contains(t, body, `"type":"diagnostics"`)
+	require.Contains(t, body, `"upstream_model":"gpt-5.4"`)
+	require.Contains(t, body, `"upstream_http_status":503`)
+	require.Contains(t, body, `"upstream_error_code":"upstream_error"`)
+	require.Contains(t, body, `"upstream_error_reason":"relay temporarily unavailable; token=***"`)
+	require.NotContains(t, body, "relay-secret")
+}

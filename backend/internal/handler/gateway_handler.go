@@ -1605,6 +1605,7 @@ func (h *GatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotT
 func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *service.UpstreamFailoverError, platform string, streamStarted bool) {
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
+	details := service.DescribeUpstreamFailoverError(failoverErr)
 	if service.IsOpenAISilentRefusalErrorBody(responseBody) {
 		service.SetOpsUpstreamError(c, statusCode, service.OpenAISilentRefusalClientMessage(), "")
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage(), streamStarted)
@@ -1621,16 +1622,19 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 			}
 
 			// 确定响应消息
-			msg := service.ExtractUpstreamErrorMessage(responseBody)
+			msg := details.Reason
 			if !rule.PassthroughBody && rule.CustomMessage != nil {
 				msg = *rule.CustomMessage
+			}
+			if strings.TrimSpace(msg) == "" {
+				msg = "Upstream request failed"
 			}
 
 			if rule.SkipMonitoring {
 				c.Set(service.OpsSkipPassthroughKey, true)
 			}
 
-			h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
+			h.handleStreamingAwareError(c, respCode, details.Code, msg, streamStarted)
 			return
 		}
 	}
@@ -1641,6 +1645,11 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
+	if details.Code == service.UpstreamModelNotFoundErrorCode {
+		status = http.StatusBadGateway
+		errType = details.Code
+		errMsg = "Upstream model not found"
+	}
 	if platform == service.PlatformAnthropic || platform == service.PlatformOpenAI {
 		errMsg = service.BuildFailoverExhaustedClientMessage(errMsg, failoverErr)
 	}

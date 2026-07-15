@@ -8031,6 +8031,17 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	}
 
 	MarkResponseCommitted(c)
+	details := DescribeUpstreamError(resp.StatusCode, body)
+	if details.Code == UpstreamModelNotFoundErrorCode {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"type": "error",
+			"error": gin.H{
+				"type":    details.Code,
+				"message": BuildUpstreamErrorClientMessage("Upstream model not found", resp.StatusCode, body),
+			},
+		})
+		return nil, fmt.Errorf("%s: upstream HTTP %d", details.Code, details.StatusCode)
+	}
 
 	// 记录上游错误响应体摘要便于排障（可选：由配置控制；不回显到客户端）
 	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {

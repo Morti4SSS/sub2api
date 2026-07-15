@@ -4450,6 +4450,8 @@ export default {
       testDiagnosticPassthrough: '自动透传',
       testDiagnosticThinking: '思考映射',
       testDiagnosticHTTP: '上游状态',
+      testDiagnosticErrorCode: '上游错误类型',
+      testDiagnosticErrorReason: '上游原因',
       imagePromptLabel: '生图提示词',
       imagePromptPlaceholder: '例如：生成一只戴宇航员头盔的橘猫，像素插画风格，纯色背景。',
       imagePromptDefault: 'Generate a cute orange cat astronaut sticker on a clean pastel background.',

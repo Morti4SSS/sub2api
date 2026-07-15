@@ -303,4 +303,38 @@ describe('AccountTestModal', () => {
     expect(wrapper.text()).toContain('max -> reasoning_effort=on')
     expect(wrapper.text()).toContain('HTTP 200')
   })
+
+  it('renders sanitized upstream error diagnostics from a failed test', async () => {
+    const encoder = new TextEncoder()
+    const chunks = [
+      encoder.encode('data: {"type":"diagnostics","data":{"account_id":303,"account_name":"Claude relay failure","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"claude-opus-4-8","upstream_model":"glm-5.2","passthrough":true,"upstream_http_status":404,"upstream_error_code":"upstream_model_not_found","upstream_error_reason":"model glm-5.2 not found; api_key=***"}}\n\n'),
+      encoder.encode('data: {"type":"error","error":"Connection test failed"}\n\n')
+    ]
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn().mockImplementation(() => Promise.resolve(
+            chunks.length > 0
+              ? { done: false, value: chunks.shift() }
+              : { done: true, value: undefined }
+          ))
+        })
+      }
+    } as any)
+    const wrapper = mount(AccountTestModal, {
+      props: { show: true, account: buildAccount({ platform: 'anthropic' }) },
+      global: {
+        stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true }
+      }
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'claude-opus-4-8'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.accounts.testDiagnosticErrorCode: upstream_model_not_found')
+    expect(wrapper.text()).toContain('admin.accounts.testDiagnosticErrorReason: model glm-5.2 not found; api_key=***')
+  })
 })

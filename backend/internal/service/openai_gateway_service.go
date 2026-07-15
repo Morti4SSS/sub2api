@@ -3893,6 +3893,16 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 		Detail:               upstreamDetail,
 		UpstreamResponseBody: upstreamDetail,
 	})
+	details := DescribeUpstreamError(resp.StatusCode, body)
+	if details.Code == UpstreamModelNotFoundErrorCode {
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": gin.H{
+				"type":    details.Code,
+				"message": BuildUpstreamErrorClientMessage("Upstream model not found", resp.StatusCode, body),
+			},
+		})
+		return fmt.Errorf("%s: upstream HTTP %d", details.Code, details.StatusCode)
+	}
 
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := resp.Header.Get("Content-Type")

@@ -4295,6 +4295,8 @@ export default {
       testDiagnosticPassthrough: 'Automatic passthrough',
       testDiagnosticThinking: 'Thinking mapping',
       testDiagnosticHTTP: 'Upstream status',
+      testDiagnosticErrorCode: 'Upstream error type',
+      testDiagnosticErrorReason: 'Upstream reason',
       imagePromptLabel: 'Image prompt',
       imagePromptPlaceholder: 'Example: Generate an orange cat astronaut sticker in pixel-art style on a solid background.',
       imagePromptDefault: 'Generate a cute orange cat astronaut sticker on a clean pastel background.',

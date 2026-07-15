@@ -64,6 +64,52 @@ type AccountTestDiagnostics struct {
 	ThinkingTargetField  string `json:"thinking_target_field,omitempty"`
 	ThinkingTargetValue  string `json:"thinking_target_value,omitempty"`
 	UpstreamHTTPStatus   int    `json:"upstream_http_status"`
+	UpstreamErrorCode    string `json:"upstream_error_code,omitempty"`
+	UpstreamErrorReason  string `json:"upstream_error_reason,omitempty"`
+}
+
+func describeAccountTestGatewayError(err error, gatewayContext *gin.Context, responseBody []byte, diagnostics *AccountTestDiagnostics) (string, bool) {
+	var failoverErr *UpstreamFailoverError
+	if diagnostics == nil {
+		return "", false
+	}
+
+	var details UpstreamFailureDetails
+	if errors.As(err, &failoverErr) {
+		details = DescribeUpstreamFailoverError(failoverErr)
+	} else {
+		statusCode := 0
+		hasOpsPayload := false
+		if gatewayContext != nil {
+			if value, ok := gatewayContext.Get(OpsUpstreamStatusCodeKey); ok {
+				statusCode, _ = value.(int)
+			}
+			if value, ok := gatewayContext.Get(OpsUpstreamErrorDetailKey); ok {
+				if detail, _ := value.(string); strings.TrimSpace(detail) != "" {
+					responseBody = []byte(detail)
+					hasOpsPayload = true
+				}
+			}
+			if value, ok := gatewayContext.Get(OpsUpstreamErrorMessageKey); ok && !hasOpsPayload {
+				if upstreamMessage, _ := value.(string); strings.TrimSpace(upstreamMessage) != "" {
+					responseBody, _ = json.Marshal(map[string]any{"error": map[string]any{"message": upstreamMessage}})
+				}
+			}
+		}
+		if statusCode <= 0 {
+			return "", false
+		}
+		details = DescribeUpstreamError(statusCode, responseBody)
+	}
+	diagnostics.UpstreamHTTPStatus = details.StatusCode
+	diagnostics.UpstreamErrorCode = details.Code
+	diagnostics.UpstreamErrorReason = details.Reason
+
+	message := fmt.Sprintf("%s: upstream HTTP %d", details.Code, details.StatusCode)
+	if details.Reason != "" {
+		message += " " + details.Reason
+	}
+	return message, true
 }
 
 const (
@@ -404,7 +450,11 @@ func (s *AccountTestService) testClaudeAccountConnectionViaGateway(c *gin.Contex
 		ClientIdentity: "claude_code_cli",
 		GatewayPath:    "claude_messages",
 		RequestedModel: testModelID,
+		UpstreamModel:  testModelID,
 		Passthrough:    account.IsAnthropicAPIKeyPassthroughEnabled(),
+	}
+	if hasRoute {
+		diagnostics.UpstreamModel = route.UpstreamModel
 	}
 	if hasRoute && len(route.Thinking) > 0 {
 		payload["output_config"] = map[string]any{"effort": "max"}
@@ -444,9 +494,12 @@ func (s *AccountTestService) testClaudeAccountConnectionViaGateway(c *gin.Contex
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	result, err := s.gatewayService.Forward(requestCtx, gatewayContext, account, parsed)
 	if err != nil {
+		if message, ok := describeAccountTestGatewayError(err, gatewayContext, gatewayRecorder.Body.Bytes(), &diagnostics); ok {
+			s.sendEvent(c, TestEvent{Type: "diagnostics", Data: diagnostics})
+			return s.sendErrorAndEnd(c, message)
+		}
 		return s.sendErrorAndEnd(c, err.Error())
 	}
-	diagnostics.UpstreamModel = testModelID
 	if result != nil && strings.TrimSpace(result.UpstreamModel) != "" {
 		diagnostics.UpstreamModel = result.UpstreamModel
 	}
@@ -814,24 +867,28 @@ func (s *AccountTestService) testOpenAIAccountConnectionViaGateway(c *gin.Contex
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	diagnostics := AccountTestDiagnostics{
+		AccountID:      account.ID,
+		AccountName:    account.Name,
+		ClientIdentity: "codex_cli",
+		GatewayPath:    "openai_responses",
+		RequestedModel: testModelID,
+		UpstreamModel:  account.GetMappedModel(testModelID),
+		Passthrough:    account.IsOpenAIPassthroughEnabled(),
+	}
 	result, err := s.openAIGatewayService.Forward(requestCtx, gatewayContext, account, body)
 	if err != nil {
+		if message, ok := describeAccountTestGatewayError(err, gatewayContext, gatewayRecorder.Body.Bytes(), &diagnostics); ok {
+			s.sendEvent(c, TestEvent{Type: "diagnostics", Data: diagnostics})
+			return s.sendErrorAndEnd(c, message)
+		}
 		return s.sendErrorAndEnd(c, err.Error())
 	}
-	upstreamModel := testModelID
 	if result != nil && strings.TrimSpace(result.UpstreamModel) != "" {
-		upstreamModel = result.UpstreamModel
+		diagnostics.UpstreamModel = result.UpstreamModel
 	}
-	s.sendEvent(c, TestEvent{Type: "diagnostics", Data: AccountTestDiagnostics{
-		AccountID:          account.ID,
-		AccountName:        account.Name,
-		ClientIdentity:     "codex_cli",
-		GatewayPath:        "openai_responses",
-		RequestedModel:     testModelID,
-		UpstreamModel:      upstreamModel,
-		Passthrough:        account.IsOpenAIPassthroughEnabled(),
-		UpstreamHTTPStatus: http.StatusOK,
-	}})
+	diagnostics.UpstreamHTTPStatus = http.StatusOK
+	s.sendEvent(c, TestEvent{Type: "diagnostics", Data: diagnostics})
 	return s.processOpenAIStream(c, bytes.NewReader(gatewayRecorder.Body.Bytes()))
 }
 

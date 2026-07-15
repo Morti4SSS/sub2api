@@ -537,6 +537,8 @@ const handleEvent = (event: {
     thinking_target_field?: string
     thinking_target_value?: string
     upstream_http_status?: number
+    upstream_error_code?: string
+    upstream_error_reason?: string
   }
 }) => {
   switch (event.type) {
@@ -594,6 +596,12 @@ const handleEvent = (event: {
       }
       if (data.upstream_http_status != null) {
         addLine(`${t('admin.accounts.testDiagnosticHTTP')}: HTTP ${data.upstream_http_status}`, 'text-cyan-300')
+      }
+      if (data.upstream_error_code) {
+        addLine(`${t('admin.accounts.testDiagnosticErrorCode')}: ${data.upstream_error_code}`, 'text-red-300')
+      }
+      if (data.upstream_error_reason) {
+        addLine(`${t('admin.accounts.testDiagnosticErrorReason')}: ${data.upstream_error_reason}`, 'text-red-300')
       }
       break
     }

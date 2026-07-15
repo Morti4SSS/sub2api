@@ -28,3 +28,26 @@ func TestBuildFailoverExhaustedClientMessageRedactsSecrets(t *testing.T) {
 	require.NotContains(t, got, "sk-test-secret")
 	require.NotContains(t, got, "rt-secret")
 }
+
+func TestDescribeUpstreamFailoverErrorClassifiesModelNotFound(t *testing.T) {
+	details := DescribeUpstreamFailoverError(&UpstreamFailoverError{
+		StatusCode:   http.StatusNotFound,
+		ResponseBody: []byte(`{"error":{"code":"model_not_found","message":"model glm-5.2 not found; api_key=relay-secret"}}`),
+	})
+
+	require.Equal(t, "upstream_model_not_found", details.Code)
+	require.Equal(t, http.StatusNotFound, details.StatusCode)
+	require.Contains(t, details.Reason, "model glm-5.2 not found")
+	require.NotContains(t, details.Reason, "relay-secret")
+}
+
+func TestDescribeUpstreamFailoverErrorKeepsEndpoint404AsUpstreamError(t *testing.T) {
+	details := DescribeUpstreamFailoverError(&UpstreamFailoverError{
+		StatusCode:   http.StatusNotFound,
+		ResponseBody: []byte(`{"error":{"message":"endpoint /v1/responses not found"}}`),
+	})
+
+	require.Equal(t, "upstream_error", details.Code)
+	require.Equal(t, http.StatusNotFound, details.StatusCode)
+	require.Equal(t, "endpoint /v1/responses not found", details.Reason)
+}
