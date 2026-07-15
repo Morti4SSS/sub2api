@@ -55,18 +55,29 @@
         />
       </div>
 
-      <div v-if="isOpenAIAccount" class="space-y-1.5">
-        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-          {{ t('admin.accounts.openai.testMode') }}
+      <details
+        v-if="isOpenAIAccount"
+        data-testid="compact-test-settings"
+        class="border-t border-gray-100 pt-2 dark:border-dark-600"
+      >
+        <summary class="cursor-pointer text-sm text-gray-600 dark:text-gray-300">
+          {{ t('admin.accounts.openai.compactAdvancedTest') }}
+        </summary>
+        <label class="mt-3 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+          <input
+            v-model="compactTestEnabled"
+            type="checkbox"
+            :disabled="status === 'connecting'"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
+          />
+          {{ t('admin.accounts.openai.compactTestEnabled') }}
         </label>
-        <Select
-          v-model="testMode"
-          :options="openAITestModeOptions"
-          :disabled="status === 'connecting'"
-        />
-      </div>
+        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.openai.compactTestHint') }}
+        </p>
+      </details>
 
-      <div class="space-y-1.5">
+      <div v-if="testMode !== 'compact'" class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
           :label="supportsImageTest ? t('admin.accounts.imagePromptLabel') : t('admin.accounts.testPromptLabel')"
@@ -75,6 +86,9 @@
           :disabled="status === 'connecting'"
           rows="3"
         />
+        <p v-if="isProbePrompt" class="text-xs text-red-600 dark:text-red-400">
+          {{ t('admin.accounts.testPromptProbeRejected') }}
+        </p>
       </div>
 
       <!-- Terminal Output -->
@@ -205,10 +219,10 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId"
+          :disabled="status === 'connecting' || !selectedModelId || isProbePrompt"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            status === 'connecting' || !selectedModelId
+            status === 'connecting' || !selectedModelId || isProbePrompt
               ? 'cursor-not-allowed bg-primary-400 text-white'
               : status === 'success'
                 ? 'bg-green-500 text-white hover:bg-green-600'
@@ -282,17 +296,24 @@ const streamingContent = ref('')
 const errorMessage = ref('')
 const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
-const testPrompt = ref('')
+const defaultTextTestPrompt = t('admin.accounts.defaultConnectionTestPrompt')
+const testPrompt = ref(defaultTextTestPrompt)
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
 const testMode = ref<'default' | 'compact'>('default')
 const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
 const supportsTextPrompt = computed(() => props.account?.platform === 'openai' || props.account?.platform === 'anthropic')
-const openAITestModeOptions = computed(() => [
-  { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
-  { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
-])
+const compactTestEnabled = computed({
+  get: () => testMode.value === 'compact',
+  set: (enabled: boolean) => {
+    testMode.value = enabled ? 'compact' : 'default'
+  }
+})
+const probePrompts = new Set(['hi', 'hello', 'ping', 'test'])
+const isProbePrompt = computed(() =>
+  testMode.value !== 'compact' && probePrompts.has(testPrompt.value.trim().toLowerCase())
+)
 const previewImageUrl = ref('')
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const supportsGeminiImageTest = computed(() => {
@@ -326,7 +347,7 @@ watch(
   () => props.show,
   async (newVal) => {
     if (newVal && props.account) {
-      testPrompt.value = ''
+      testPrompt.value = defaultTextTestPrompt
       testMode.value = 'default'
       resetState()
       await loadAvailableModels()
@@ -337,8 +358,11 @@ watch(
 )
 
 watch(selectedModelId, () => {
-  if (supportsImageTest.value && !testPrompt.value.trim()) {
-    testPrompt.value = t('admin.accounts.imagePromptDefault')
+  const imagePrompt = t('admin.accounts.imagePromptDefault')
+  if (supportsImageTest.value && (!testPrompt.value.trim() || testPrompt.value === defaultTextTestPrompt)) {
+    testPrompt.value = imagePrompt
+  } else if (!supportsImageTest.value && testPrompt.value === imagePrompt) {
+    testPrompt.value = defaultTextTestPrompt
   }
 })
 
@@ -407,6 +431,13 @@ const scrollToBottom = async () => {
 
 const startTest = async () => {
   if (!props.account || !selectedModelId.value) return
+  if (isProbePrompt.value) {
+    resetState()
+    status.value = 'error'
+    errorMessage.value = t('admin.accounts.testPromptProbeRejected')
+    addLine(errorMessage.value, 'text-red-400')
+    return
+  }
 
   resetState()
   status.value = 'connecting'
@@ -421,7 +452,9 @@ const startTest = async () => {
   try {
     // Use the configured API base; EventSource does not support POST.
     const url = buildApiUrl(`/admin/accounts/${props.account.id}/test`)
-    const requestPrompt = (supportsImageTest.value || supportsTextPrompt.value) ? testPrompt.value.trim() : ''
+    const requestPrompt = testMode.value === 'compact'
+      ? ''
+      : (supportsImageTest.value || supportsTextPrompt.value) ? testPrompt.value.trim() : ''
 
     // Use fetch with streaming for SSE since EventSource doesn't support POST
     const response = await fetch(url, {
@@ -492,6 +525,19 @@ const handleEvent = (event: {
   error?: string
   image_url?: string
   mime_type?: string
+  data?: {
+    account_id?: number
+    account_name?: string
+    client_identity?: string
+    gateway_path?: string
+    requested_model?: string
+    upstream_model?: string
+    passthrough?: boolean
+    thinking_source_effort?: string
+    thinking_target_field?: string
+    thinking_target_value?: string
+    upstream_http_status?: number
+  }
 }) => {
   switch (event.type) {
     case 'test_start':
@@ -521,6 +567,36 @@ const handleEvent = (event: {
         addLine(event.text, 'text-cyan-300')
       }
       break
+
+    case 'diagnostics': {
+      const data = event.data
+      if (!data) break
+      if (data.account_name && data.account_id != null) {
+        addLine(`${t('admin.accounts.testDiagnosticAccount')}: ${data.account_name} (#${data.account_id})`, 'text-cyan-300')
+      }
+      if (data.client_identity) {
+        addLine(`${t('admin.accounts.testDiagnosticClient')}: ${data.client_identity}`, 'text-cyan-300')
+      }
+      if (data.gateway_path) {
+        addLine(`${t('admin.accounts.testDiagnosticGateway')}: ${data.gateway_path}`, 'text-cyan-300')
+      }
+      if (data.requested_model && data.upstream_model) {
+        addLine(`${t('admin.accounts.testDiagnosticModel')}: ${data.requested_model} -> ${data.upstream_model}`, 'text-cyan-300')
+      }
+      if (data.passthrough != null) {
+        addLine(`${t('admin.accounts.testDiagnosticPassthrough')}: ${String(data.passthrough)}`, 'text-cyan-300')
+      }
+      if (data.thinking_source_effort && data.thinking_target_field && data.thinking_target_value) {
+        addLine(
+          `${t('admin.accounts.testDiagnosticThinking')}: ${data.thinking_source_effort} -> ${data.thinking_target_field}=${data.thinking_target_value}`,
+          'text-cyan-300'
+        )
+      }
+      if (data.upstream_http_status != null) {
+        addLine(`${t('admin.accounts.testDiagnosticHTTP')}: HTTP ${data.upstream_http_status}`, 'text-cyan-300')
+      }
+      break
+    }
 
     case 'image':
       if (event.image_url) {

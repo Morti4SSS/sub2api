@@ -26,6 +26,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 // sseDataPrefix matches SSE data lines with optional whitespace after colon.
@@ -51,9 +52,23 @@ type TestEvent struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type AccountTestDiagnostics struct {
+	AccountID            int64  `json:"account_id"`
+	AccountName          string `json:"account_name"`
+	ClientIdentity       string `json:"client_identity"`
+	GatewayPath          string `json:"gateway_path"`
+	RequestedModel       string `json:"requested_model"`
+	UpstreamModel        string `json:"upstream_model"`
+	Passthrough          bool   `json:"passthrough"`
+	ThinkingSourceEffort string `json:"thinking_source_effort,omitempty"`
+	ThinkingTargetField  string `json:"thinking_target_field,omitempty"`
+	ThinkingTargetValue  string `json:"thinking_target_value,omitempty"`
+	UpstreamHTTPStatus   int    `json:"upstream_http_status"`
+}
+
 const (
-	defaultClaudeTestPrompt      = "Respond with OK."
-	defaultOpenAITextTestPrompt  = "hi"
+	defaultClaudeTestPrompt      = "In one complete sentence, explain why a reliable API connection matters."
+	defaultOpenAITextTestPrompt  = "In one complete sentence, explain why a reliable API connection matters."
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
@@ -71,6 +86,8 @@ type AccountTestService struct {
 	claudeTokenProvider       *ClaudeTokenProvider
 	grokTokenProvider         *GrokTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
+	gatewayService            *GatewayService
+	openAIGatewayService      *OpenAIGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
@@ -83,6 +100,8 @@ func NewAccountTestService(
 	claudeTokenProvider *ClaudeTokenProvider,
 	grokTokenProvider *GrokTokenProvider,
 	antigravityGatewayService *AntigravityGatewayService,
+	gatewayService *GatewayService,
+	openAIGatewayService *OpenAIGatewayService,
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
@@ -93,10 +112,27 @@ func NewAccountTestService(
 		claudeTokenProvider:       claudeTokenProvider,
 		grokTokenProvider:         grokTokenProvider,
 		antigravityGatewayService: antigravityGatewayService,
+		gatewayService:            gatewayService,
+		openAIGatewayService:      openAIGatewayService,
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
 	}
+}
+
+func normalizeAccountTestPrompt(prompt, fallback string) (string, error) {
+	normalized := strings.TrimSpace(prompt)
+	if normalized == "" {
+		normalized = strings.TrimSpace(fallback)
+	}
+	switch strings.ToLower(normalized) {
+	case "hi", "hello", "ping", "test":
+		return "", fmt.Errorf("test prompt must be a complete question, not a probe word")
+	}
+	if normalized == "" {
+		return "", fmt.Errorf("test prompt must not be empty")
+	}
+	return normalized, nil
 }
 
 func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error) {
@@ -191,9 +227,24 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 
+	mode = normalizeAccountTestMode(mode)
+	if mode != AccountTestModeCompact {
+		isOpenAIText := account.IsOpenAI() && !isOpenAIImageModel(account.GetMappedModel(modelID))
+		if account.Platform == PlatformAnthropic || isOpenAIText {
+			fallback := defaultClaudeTestPrompt
+			if account.IsOpenAI() {
+				fallback = defaultOpenAITextTestPrompt
+			}
+			prompt, err = normalizeAccountTestPrompt(prompt, fallback)
+			if err != nil {
+				return s.sendErrorAndEnd(c, err.Error())
+			}
+		}
+	}
+
 	// Route to platform-specific test method
 	if account.IsOpenAI() {
-		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
+		return s.testOpenAIAccountConnection(c, account, modelID, prompt, mode)
 	}
 
 	if account.IsGemini() {
@@ -219,6 +270,9 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	testModelID := modelID
 	if testModelID == "" {
 		testModelID = claude.DefaultTestModel
+	}
+	if s.gatewayService != nil && account.Platform == PlatformAnthropic && !account.IsBedrock() && account.Type != AccountTypeServiceAccount {
+		return s.testClaudeAccountConnectionViaGateway(c, account, testModelID, prompt)
 	}
 
 	// API Key 账号测试连接时也需要应用通配符模型映射。
@@ -332,6 +386,73 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	// Process SSE stream
 	return s.processClaudeStream(c, resp.Body)
+}
+
+func (s *AccountTestService) testClaudeAccountConnectionViaGateway(c *gin.Context, account *Account, testModelID string, prompt string) error {
+	route, hasRoute := account.ResolveClaudeCodeRoute(testModelID)
+	if account.Type == AccountTypeAPIKey && !hasRoute {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Account does not configure Claude Code shell %s", testModelID))
+	}
+
+	payload, err := createTestPayloadWithPrompt(testModelID, prompt)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create test payload")
+	}
+	diagnostics := AccountTestDiagnostics{
+		AccountID:      account.ID,
+		AccountName:    account.Name,
+		ClientIdentity: "claude_code_cli",
+		GatewayPath:    "claude_messages",
+		RequestedModel: testModelID,
+		Passthrough:    account.IsAnthropicAPIKeyPassthroughEnabled(),
+	}
+	if hasRoute && len(route.Thinking) > 0 {
+		payload["output_config"] = map[string]any{"effort": "max"}
+		diagnostics.ThinkingSourceEffort = "max"
+		diagnostics.ThinkingTargetField = claudeCodeEffortStringValue(route.Thinking["target_field"])
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode test payload")
+	}
+	if diagnostics.ThinkingTargetField != "" {
+		if mappedBody, changed := ApplyClaudeCodeEffortMapping(body, account, testModelID); changed {
+			diagnostics.ThinkingTargetValue = gjson.GetBytes(mappedBody, diagnostics.ThinkingTargetField).String()
+		}
+	}
+
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to parse test payload")
+	}
+	requestCtx := SetClaudeCodeClient(c.Request.Context(), true)
+	requestCtx = SetClaudeCodeVersion(requestCtx, claude.CLICurrentVersion)
+	gatewayRecorder := httptest.NewRecorder()
+	gatewayContext, _ := gin.CreateTestContext(gatewayRecorder)
+	gatewayContext.Request = httptest.NewRequestWithContext(requestCtx, http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	gatewayContext.Request.Header.Set("Content-Type", "application/json")
+	gatewayContext.Request.Header.Set("anthropic-version", "2023-06-01")
+	gatewayContext.Request.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+	for key, value := range claude.DefaultHeaders {
+		gatewayContext.Request.Header.Set(key, value)
+	}
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	result, err := s.gatewayService.Forward(requestCtx, gatewayContext, account, parsed)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+	diagnostics.UpstreamModel = testModelID
+	if result != nil && strings.TrimSpace(result.UpstreamModel) != "" {
+		diagnostics.UpstreamModel = result.UpstreamModel
+	}
+	diagnostics.UpstreamHTTPStatus = http.StatusOK
+	s.sendEvent(c, TestEvent{Type: "diagnostics", Data: diagnostics})
+	return s.processClaudeStream(c, bytes.NewReader(gatewayRecorder.Body.Bytes()))
 }
 
 func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string, prompt string) error {
@@ -540,6 +661,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
 	}
+	if s.openAIGatewayService != nil {
+		return s.testOpenAIAccountConnectionViaGateway(c, account, modelID, prompt)
+	}
 
 	credentialAccount := account
 	if account.IsCredentialShadow() {
@@ -663,6 +787,52 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// Process SSE stream
 	return s.processOpenAIStream(c, resp.Body)
+}
+
+func (s *AccountTestService) testOpenAIAccountConnectionViaGateway(c *gin.Context, account *Account, modelID string, prompt string) error {
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = openai.DefaultTestModel
+	}
+	payload := createOpenAITestPayloadWithPrompt(testModelID, account.IsOAuth(), prompt)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode test payload")
+	}
+
+	requestCtx := c.Request.Context()
+	gatewayRecorder := httptest.NewRecorder()
+	gatewayContext, _ := gin.CreateTestContext(gatewayRecorder)
+	gatewayContext.Request = httptest.NewRequestWithContext(requestCtx, http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	gatewayContext.Request.Header.Set("Content-Type", "application/json")
+	gatewayContext.Request.Header.Set("Accept", "text/event-stream")
+	gatewayContext.Request.Header.Set("User-Agent", codexCLIUserAgent)
+	gatewayContext.Request.Header.Set("Originator", "codex_cli_rs")
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	result, err := s.openAIGatewayService.Forward(requestCtx, gatewayContext, account, body)
+	if err != nil {
+		return s.sendErrorAndEnd(c, err.Error())
+	}
+	upstreamModel := testModelID
+	if result != nil && strings.TrimSpace(result.UpstreamModel) != "" {
+		upstreamModel = result.UpstreamModel
+	}
+	s.sendEvent(c, TestEvent{Type: "diagnostics", Data: AccountTestDiagnostics{
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		ClientIdentity:     "codex_cli",
+		GatewayPath:        "openai_responses",
+		RequestedModel:     testModelID,
+		UpstreamModel:      upstreamModel,
+		Passthrough:        account.IsOpenAIPassthroughEnabled(),
+		UpstreamHTTPStatus: http.StatusOK,
+	}})
+	return s.processOpenAIStream(c, bytes.NewReader(gatewayRecorder.Body.Bytes()))
 }
 
 // testGrokAccountConnection tests a Grok OAuth account through xAI's Responses API.
@@ -1383,7 +1553,7 @@ func createOpenAITestPayloadWithPrompt(modelID string, isOAuth bool, prompt stri
 func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[string]any {
 	testPrompt := strings.TrimSpace(prompt)
 	if testPrompt == "" {
-		testPrompt = "hi"
+		testPrompt = defaultOpenAITextTestPrompt
 	}
 
 	return map[string]any{

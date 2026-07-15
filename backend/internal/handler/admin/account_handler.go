@@ -2393,6 +2393,26 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	}
 
 	// Handle Claude/Anthropic accounts
+	if account.Type == service.AccountTypeAPIKey && account.Extra != nil {
+		if _, hasRoutesOwner := account.Extra["claude_code_routes"]; hasRoutesOwner {
+			routes := account.GetClaudeCodeRoutes()
+			models := make([]claude.Model, 0, len(routes))
+			for _, route := range routes {
+				displayName := route.DisplayName
+				if displayName == "" {
+					displayName = route.ShellModel
+				}
+				models = append(models, claude.Model{
+					ID:          route.ShellModel,
+					Type:        "model",
+					DisplayName: displayName,
+				})
+			}
+			response.Success(c, models)
+			return
+		}
+	}
+
 	// For OAuth and Setup-Token accounts: return default models
 	if account.IsOAuth() {
 		response.Success(c, claude.DefaultModels)

@@ -137,6 +137,9 @@ describe('AccountTestModal', () => {
     await flushPromises()
     ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
     ;(wrapper.vm as any).testMode = 'compact'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-testid="compact-test-settings"]').exists()).toBe(true)
+    expect(wrapper.find('textarea').exists()).toBe(false)
     await (wrapper.vm as any).startTest()
     await flushPromises()
 
@@ -146,6 +149,42 @@ describe('AccountTestModal', () => {
       model_id: 'gpt-5.4',
       mode: 'compact'
     })
+  })
+
+  it('uses a complete default question instead of a probe word', async () => {
+    const wrapper = mount(AccountTestModal, {
+      props: { show: true, account: buildAccount() },
+      global: {
+        stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true }
+      }
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    const [, options] = (global.fetch as any).mock.calls[0]
+    const prompt = JSON.parse(options.body).prompt
+    expect(prompt.length).toBeGreaterThan(20)
+    expect(['hi', 'hello', 'ping', 'test']).not.toContain(prompt.toLowerCase())
+  })
+
+  it('blocks explicit probe words before sending the request', async () => {
+    const wrapper = mount(AccountTestModal, {
+      props: { show: true, account: buildAccount() },
+      global: {
+        stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true }
+      }
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    await wrapper.get('textarea').setValue('hi')
+    await (wrapper.vm as any).startTest()
+
+    expect(global.fetch).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('admin.accounts.testPromptProbeRejected')
   })
 
   it('sends custom prompt for text account tests', async () => {
@@ -226,5 +265,42 @@ describe('AccountTestModal', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('已通过 /v1/chat/completions 验证')
+  })
+
+  it('renders fixed-account gateway diagnostics from test SSE', async () => {
+    const encoder = new TextEncoder()
+    const chunks = [
+      encoder.encode('data: {"type":"diagnostics","data":{"account_id":301,"account_name":"Claude relay A","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"claude-opus-4-8","upstream_model":"glm-5.2","passthrough":true,"thinking_source_effort":"max","thinking_target_field":"reasoning_effort","thinking_target_value":"on","upstream_http_status":200}}\n\n'),
+      encoder.encode('data: {"type":"test_complete","success":true}\n\n')
+    ]
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: vi.fn().mockImplementation(() => Promise.resolve(
+            chunks.length > 0
+              ? { done: false, value: chunks.shift() }
+              : { done: true, value: undefined }
+          ))
+        })
+      }
+    } as any)
+    const wrapper = mount(AccountTestModal, {
+      props: { show: true, account: buildAccount() },
+      global: {
+        stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true }
+      }
+    })
+
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Claude relay A (#301)')
+    expect(wrapper.text()).toContain('claude_code_cli')
+    expect(wrapper.text()).toContain('claude-opus-4-8 -> glm-5.2')
+    expect(wrapper.text()).toContain('max -> reasoning_effort=on')
+    expect(wrapper.text()).toContain('HTTP 200')
   })
 })

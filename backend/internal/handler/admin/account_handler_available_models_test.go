@@ -65,6 +65,8 @@ func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream servi
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 		upstream,
 		&config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 		nil,
@@ -132,6 +134,40 @@ func TestAccountHandlerGetClaudeCodeOptionsUsesCanonicalConstants(t *testing.T) 
 		ids = append(ids, model.ID)
 	}
 	require.Contains(t, ids, "claude-opus-4-8")
+}
+
+func TestAccountHandlerGetAvailableModels_AnthropicRoutesOwnerOnlyReturnsConfiguredShells(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       47,
+			Platform: service.PlatformAnthropic,
+			Type:     service.AccountTypeAPIKey,
+			Extra: map[string]any{
+				"claude_code_routes": []any{map[string]any{
+					"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2", "display_name": "Strong model route",
+				}},
+			},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, []struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	}{{ID: "claude-opus-4-8", DisplayName: "Strong model route"}}, resp.Data)
 }
 
 func TestAccountHandlerGetAvailableModels_GrokDefaultsToXAIModelsWithoutMapping(t *testing.T) {
