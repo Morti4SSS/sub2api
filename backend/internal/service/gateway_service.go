@@ -10867,6 +10867,52 @@ func (s *GatewayService) GetClaudeCodeModelCatalog(ctx context.Context, groupID 
 	return out
 }
 
+// GetStableClaudeCodeModelCatalog builds the group-owned shell directory and optional safe context metadata.
+func (s *GatewayService) GetStableClaudeCodeModelCatalog(ctx context.Context, group *Group) []ClaudeCodeModelCatalogEntry {
+	models := ClaudeCodeModelsForGroup(group)
+	catalog := make([]ClaudeCodeModelCatalogEntry, 0, len(models))
+
+	var accounts []Account
+	if s != nil && s.accountRepo != nil && group != nil {
+		if listed, err := s.accountRepo.ListByGroup(ctx, group.ID); err == nil {
+			accounts = listed
+		}
+	}
+
+	for _, model := range models {
+		entry := ClaudeCodeModelCatalogEntry{
+			DisplayName:  model.DisplayName,
+			RequestModel: model.ID,
+		}
+		hasRoute := false
+		allContextsKnown := true
+		var safeContext int64
+		for i := range accounts {
+			account := &accounts[i]
+			if account.Platform != PlatformAnthropic {
+				continue
+			}
+			route, matched := account.ResolveClaudeCodeRoute(model.ID)
+			if !matched {
+				continue
+			}
+			hasRoute = true
+			if route.ContextWindow <= 0 {
+				allContextsKnown = false
+				break
+			}
+			if safeContext == 0 || route.ContextWindow < safeContext {
+				safeContext = route.ContextWindow
+			}
+		}
+		if hasRoute && allContextsKnown {
+			entry.ContextWindow = safeContext
+		}
+		catalog = append(catalog, entry)
+	}
+	return catalog
+}
+
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {
 	if s == nil || s.modelsListCache == nil {
 		return

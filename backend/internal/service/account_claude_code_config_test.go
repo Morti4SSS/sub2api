@@ -28,6 +28,13 @@ func (s *claudeCodeCatalogRepoStub) ListSchedulableByGroupID(ctx context.Context
 	return out, nil
 }
 
+func (s *claudeCodeCatalogRepoStub) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
+	accounts := s.byGroup[groupID]
+	out := make([]Account, len(accounts))
+	copy(out, accounts)
+	return out, nil
+}
+
 func TestAccountClaudeCodeModelCatalogResolvesUpstreamModel(t *testing.T) {
 	account := &Account{
 		Extra: map[string]any{
@@ -196,6 +203,72 @@ func TestGatewayServiceGetClaudeCodeModelCatalogDeduplicatesByRequestModel(t *te
 	require.Equal(t, "Relay Sonnet A", catalog[0].DisplayName)
 }
 
+func TestGatewayServiceStableClaudeCodeCatalogUsesSafeMinimumContext(t *testing.T) {
+	groupID := int64(8)
+	group := &Group{
+		ID:       groupID,
+		Platform: PlatformAnthropic,
+		ModelsListConfig: GroupModelsListConfig{
+			Enabled: true,
+			Models:  []string{"claude-opus-4-8"},
+		},
+	}
+	repo := &claudeCodeCatalogRepoStub{byGroup: map[int64][]Account{
+		groupID: {
+			{
+				ID:          1,
+				Platform:    PlatformAnthropic,
+				Schedulable: true,
+				Extra: map[string]any{"claude_code_routes": []any{map[string]any{
+					"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2", "context_window": 1_000_000,
+				}}},
+			},
+			{
+				ID:          2,
+				Platform:    PlatformAnthropic,
+				Schedulable: false,
+				Extra: map[string]any{"claude_code_routes": []any{map[string]any{
+					"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2", "context_window": 200_000,
+				}}},
+			},
+		},
+	}}
+	svc := &GatewayService{accountRepo: repo}
+
+	catalog := svc.GetStableClaudeCodeModelCatalog(context.Background(), group)
+
+	require.Len(t, catalog, 1)
+	require.Equal(t, "claude-opus-4-8", catalog[0].RequestModel)
+	require.Equal(t, int64(200_000), catalog[0].ContextWindow)
+}
+
+func TestGatewayServiceStableClaudeCodeCatalogOmitsContextWhenAnyRouteIsUnknown(t *testing.T) {
+	groupID := int64(9)
+	group := &Group{ID: groupID, Platform: PlatformAnthropic}
+	repo := &claudeCodeCatalogRepoStub{byGroup: map[int64][]Account{
+		groupID: {
+			{Platform: PlatformAnthropic, Extra: map[string]any{"claude_code_routes": []any{map[string]any{
+				"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2", "context_window": 200_000,
+			}}}},
+			{Platform: PlatformAnthropic, Extra: map[string]any{"claude_code_routes": []any{map[string]any{
+				"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
+			}}}},
+		},
+	}}
+	svc := &GatewayService{accountRepo: repo}
+
+	catalog := svc.GetStableClaudeCodeModelCatalog(context.Background(), group)
+
+	var opus ClaudeCodeModelCatalogEntry
+	for _, entry := range catalog {
+		if entry.RequestModel == "claude-opus-4-8" {
+			opus = entry
+			break
+		}
+	}
+	require.Zero(t, opus.ContextWindow)
+}
+
 func TestApplyClaudeCodeEffortMappingMapsExplicitEffort(t *testing.T) {
 	account := &Account{
 		Extra: map[string]any{
@@ -220,7 +293,7 @@ func TestApplyClaudeCodeEffortMappingMapsExplicitEffort(t *testing.T) {
 	require.Equal(t, "max", gjson.GetBytes(rewritten, "reasoning_effort").String())
 }
 
-func TestApplyClaudeCodeEffortMappingDefaultsToStrongestConfiguredLevel(t *testing.T) {
+func TestApplyClaudeCodeEffortMappingDoesNotInjectWithoutClientEffort(t *testing.T) {
 	account := &Account{
 		Extra: map[string]any{
 			"claude_code_effort_mapping": map[string]any{
@@ -236,7 +309,65 @@ func TestApplyClaudeCodeEffortMappingDefaultsToStrongestConfiguredLevel(t *testi
 	body := []byte(`{"model":"relay-sonnet","messages":[]}`)
 
 	rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, "relay-sonnet")
+	require.False(t, changed)
+	require.JSONEq(t, string(body), string(rewritten))
+}
+
+func TestApplyClaudeCodeEffortMappingMapsOrderedRouteLevels(t *testing.T) {
+	account := &Account{Extra: map[string]any{
+		"claude_code_routes": []any{map[string]any{
+			"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
+			"thinking": map[string]any{
+				"mode": "levels", "target_field": "reasoning_effort", "levels": []any{"off", "on"},
+			},
+		}},
+	}}
+
+	mediumBody := []byte(`{"model":"claude-opus-4-8","output_config":{"effort":"medium"}}`)
+	mediumRewritten, mediumChanged := ApplyClaudeCodeEffortMapping(mediumBody, account, "claude-opus-4-8")
+	require.True(t, mediumChanged)
+	require.Equal(t, "off", gjson.GetBytes(mediumRewritten, "reasoning_effort").String())
+	require.False(t, gjson.GetBytes(mediumRewritten, "output_config").Exists())
+
+	maxBody := []byte(`{"model":"claude-opus-4-8","output_config":{"effort":"max"}}`)
+	maxRewritten, maxChanged := ApplyClaudeCodeEffortMapping(maxBody, account, "claude-opus-4-8")
+	require.True(t, maxChanged)
+	require.Equal(t, "on", gjson.GetBytes(maxRewritten, "reasoning_effort").String())
+}
+
+func TestApplyClaudeCodeEffortMappingUsesPerLevelOverride(t *testing.T) {
+	account := &Account{Extra: map[string]any{
+		"claude_code_routes": []any{map[string]any{
+			"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
+			"thinking": map[string]any{
+				"mode": "levels", "target_field": "reasoning_effort", "levels": []any{"low", "high"},
+				"overrides": map[string]any{"xhigh": "turbo"},
+			},
+		}},
+	}}
+	body := []byte(`{"model":"claude-opus-4-8","output_config":{"effort":"xhigh"}}`)
+
+	rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, "claude-opus-4-8")
+
+	require.True(t, changed)
+	require.Equal(t, "turbo", gjson.GetBytes(rewritten, "reasoning_effort").String())
+}
+
+func TestApplyClaudeCodeEffortMappingWritesPositiveBudget(t *testing.T) {
+	account := &Account{Extra: map[string]any{
+		"claude_code_routes": []any{map[string]any{
+			"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
+			"thinking": map[string]any{
+				"mode": "budget", "target_field": "thinking.budget_tokens", "levels": []any{"8000", "32000"},
+			},
+		}},
+	}}
+	body := []byte(`{"model":"claude-opus-4-8","output_config":{"effort":"max"}}`)
+
+	rewritten, changed := ApplyClaudeCodeEffortMapping(body, account, "claude-opus-4-8")
+
 	require.True(t, changed)
 	require.Equal(t, int64(32000), gjson.GetBytes(rewritten, "thinking.budget_tokens").Int())
 	require.Equal(t, "enabled", gjson.GetBytes(rewritten, "thinking.type").String())
+	require.False(t, gjson.GetBytes(rewritten, "output_config").Exists())
 }
