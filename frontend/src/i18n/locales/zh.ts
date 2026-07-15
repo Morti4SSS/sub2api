@@ -3313,6 +3313,15 @@ export default {
         expiresAt: '过期时间',
         actions: '操作'
       },
+      tokenStatus: {
+        success: '成功',
+        failed: '失败',
+        noRecord: '未记录',
+        manual: '手动',
+        background: '后台',
+        lastAttempt: '最近',
+        nextWindow: '下次'
+      },
       schedulerScore: {
         baseShort: '普通',
         stickyShort: '粘性',

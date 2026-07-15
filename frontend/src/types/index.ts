@@ -838,8 +838,12 @@ export interface TempUnschedulableStatus {
 export interface AccountTokenStatus {
   access_token: 'present' | 'missing'
   refresh_token: 'present' | 'missing'
-  refresh_state: 'auto' | 'manual' | 'failed' | 'unknown'
-  message?: string
+  last_attempt_at?: string
+  last_result?: 'success' | 'failed'
+  trigger?: 'manual' | 'background'
+  error?: string
+  next_window_start?: string
+  next_window_end?: string
 }
 
 export interface Account {

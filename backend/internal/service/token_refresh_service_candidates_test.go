@@ -19,6 +19,7 @@ type tokenRefreshCandidateRepo struct {
 	setErrorCalls         int
 	setTempUnschedCalls   int
 	clearTempCalls        int
+	updateExtraCalls      int
 	lastTempUnschedReason string
 	listActiveCalls       int
 }
@@ -66,6 +67,11 @@ func (r *tokenRefreshCandidateRepo) SetTempUnschedulable(_ context.Context, _ in
 
 func (r *tokenRefreshCandidateRepo) ClearTempUnschedulable(context.Context, int64) error {
 	r.clearTempCalls++
+	return nil
+}
+
+func (r *tokenRefreshCandidateRepo) UpdateExtra(context.Context, int64, map[string]any) error {
+	r.updateExtraCalls++
 	return nil
 }
 
@@ -157,6 +163,7 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 
 	require.Zero(t, repo.listActiveCalls, "TokenRefreshService should not use the broad active-account query")
 	require.Equal(t, []int64{1, 6}, repo.updatedCredentialIDs)
+	require.Equal(t, 1, repo.updateExtraCalls, "only maintained Claude/OpenAI accounts should persist refresh audit")
 	require.Equal(t, 1, repo.clearTempCalls, "successful refresh should clear the OAuth 401 temp-unschedulable state")
 }
 

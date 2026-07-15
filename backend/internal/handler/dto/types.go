@@ -280,10 +280,14 @@ type Account struct {
 }
 
 type TokenStatus struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	RefreshState string `json:"refresh_state"`
-	Message      string `json:"message,omitempty"`
+	AccessToken     string     `json:"access_token"`
+	RefreshToken    string     `json:"refresh_token"`
+	LastAttemptAt   *time.Time `json:"last_attempt_at,omitempty"`
+	LastResult      string     `json:"last_result,omitempty"`
+	Trigger         string     `json:"trigger,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	NextWindowStart *time.Time `json:"next_window_start,omitempty"`
+	NextWindowEnd   *time.Time `json:"next_window_end,omitempty"`
 }
 
 type AccountGroup struct {

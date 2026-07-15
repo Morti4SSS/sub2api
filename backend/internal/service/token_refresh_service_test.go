@@ -24,6 +24,7 @@ type tokenRefreshAccountRepo struct {
 	lastErrorMessage       string
 	lastTempUnschedReason  string
 	lastExtraUpdates       map[string]any
+	extraUpdateHistory     []map[string]any
 	lastAccount            *Account
 	updateErr              error
 }
@@ -73,6 +74,7 @@ func (r *tokenRefreshAccountRepo) SetTempUnschedulable(ctx context.Context, id i
 func (r *tokenRefreshAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	r.updateExtraCalls++
 	r.lastExtraUpdates = shallowCopyMap(updates)
+	r.extraUpdateHistory = append(r.extraUpdateHistory, shallowCopyMap(updates))
 	if r.accountsByID != nil {
 		if acc, ok := r.accountsByID[id]; ok && acc != nil {
 			if acc.Extra == nil {
@@ -83,6 +85,20 @@ func (r *tokenRefreshAccountRepo) UpdateExtra(ctx context.Context, id int64, upd
 			}
 		}
 	}
+	return nil
+}
+
+func requireTokenRefreshAudit(t *testing.T, repo *tokenRefreshAccountRepo) *TokenRefreshStatus {
+	t.Helper()
+	for i := len(repo.extraUpdateHistory) - 1; i >= 0; i-- {
+		if raw, ok := repo.extraUpdateHistory[i][TokenRefreshStatusExtraKey]; ok {
+			account := &Account{Extra: map[string]any{TokenRefreshStatusExtraKey: raw}}
+			status := account.GetTokenRefreshStatus()
+			require.NotNil(t, status)
+			return status
+		}
+	}
+	t.Fatal("token refresh audit update was not persisted")
 	return nil
 }
 
@@ -169,6 +185,56 @@ func TestTokenRefreshService_RefreshWithRetry_InvalidatesCache(t *testing.T) {
 	require.Equal(t, 0, repo.fullUpdateCalls)
 	require.Equal(t, 1, invalidator.calls)
 	require.Equal(t, "new-token", account.GetCredential("access_token"))
+}
+
+func TestTokenRefreshService_RefreshWithRetryRecordsBackgroundSuccess(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{
+		CheckIntervalMinutes:     5,
+		RefreshBeforeExpiryHours: 0.5,
+		MaxRetries:               1,
+	}}
+	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	account := &Account{
+		ID:       105,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeOAuth,
+		Extra:    map[string]any{},
+	}
+	refresher := &tokenRefresherStub{credentials: map[string]any{
+		"access_token": "new-token",
+		"expires_at":   time.Now().Add(2 * time.Hour).Unix(),
+	}}
+
+	err := svc.refreshWithRetry(context.Background(), account, refresher, refresher, 30*time.Minute)
+
+	require.NoError(t, err)
+	audit := requireTokenRefreshAudit(t, repo)
+	require.Equal(t, TokenRefreshResultSuccess, audit.LastResult)
+	require.Equal(t, TokenRefreshTriggerBackground, audit.Trigger)
+	require.Empty(t, audit.Error)
+	require.NotNil(t, audit.NextWindowStart)
+}
+
+func TestTokenRefreshService_RefreshWithRetryRecordsBackgroundFailure(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{
+		CheckIntervalMinutes:     5,
+		RefreshBeforeExpiryHours: 0.5,
+		MaxRetries:               1,
+	}}
+	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	account := &Account{ID: 106, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{}}
+	refresher := &tokenRefresherStub{err: errors.New("invalid_grant refresh_token=relay-secret")}
+
+	err := svc.refreshWithRetry(context.Background(), account, refresher, refresher, 30*time.Minute)
+
+	require.Error(t, err)
+	audit := requireTokenRefreshAudit(t, repo)
+	require.Equal(t, TokenRefreshResultFailed, audit.LastResult)
+	require.Equal(t, TokenRefreshTriggerBackground, audit.Trigger)
+	require.Contains(t, audit.Error, "refresh_token=***")
+	require.NotContains(t, audit.Error, "relay-secret")
 }
 
 func TestTokenRefreshService_RefreshWithRetry_InvalidatorErrorIgnored(t *testing.T) {

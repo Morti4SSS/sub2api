@@ -272,8 +272,10 @@ func (s *TokenRefreshService) listActiveAccounts(ctx context.Context) ([]Account
 // refreshWithRetry 带重试的刷新
 func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Account, refresher TokenRefresher, executor OAuthRefreshExecutor, refreshWindow time.Duration) error {
 	var lastErr error
+	var lastAttemptAt time.Time
 
 	for attempt := 1; attempt <= s.cfg.MaxRetries; attempt++ {
+		lastAttemptAt = time.Now()
 		var newCredentials map[string]any
 		var err error
 
@@ -298,13 +300,16 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			if newCredentials != nil {
 				newCredentials["_token_version"] = time.Now().UnixMilli()
 				if saveErr := persistAccountCredentials(ctx, s.accountRepo, account, newCredentials); saveErr != nil {
-					return fmt.Errorf("failed to save credentials: %w", saveErr)
+					err = fmt.Errorf("failed to save credentials: %w", saveErr)
+					s.recordTokenRefreshStatus(ctx, account, err, lastAttemptAt, refreshWindow)
+					return err
 				}
 			}
 		}
 
 		if err == nil {
 			s.postRefreshActions(ctx, account)
+			s.recordTokenRefreshStatus(ctx, account, nil, lastAttemptAt, refreshWindow)
 			return nil
 		}
 
@@ -319,6 +324,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 					"error", setErr,
 				)
 			}
+			s.recordTokenRefreshStatus(ctx, account, err, lastAttemptAt, refreshWindow)
 			return err
 		}
 
@@ -364,8 +370,32 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			"until", until.Format(time.RFC3339),
 		)
 	}
+	s.recordTokenRefreshStatus(ctx, account, lastErr, lastAttemptAt, refreshWindow)
 
 	return lastErr
+}
+
+func (s *TokenRefreshService) recordTokenRefreshStatus(ctx context.Context, account *Account, refreshErr error, attemptedAt time.Time, refreshWindow time.Duration) {
+	if s == nil || s.accountRepo == nil || !ShouldTrackTokenRefreshStatus(account) {
+		return
+	}
+	checkInterval := DefaultTokenRefreshCheckInterval
+	if s.cfg != nil && s.cfg.CheckIntervalMinutes > 0 {
+		checkInterval = time.Duration(s.cfg.CheckIntervalMinutes) * time.Minute
+	}
+	status := BuildTokenRefreshStatus(
+		account,
+		TokenRefreshTriggerBackground,
+		refreshErr,
+		attemptedAt,
+		refreshWindow,
+		checkInterval,
+	)
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, TokenRefreshStatusExtraUpdate(status)); err != nil {
+		slog.Warn("token_refresh.audit_update_failed", "account_id", account.ID, "error", err)
+		return
+	}
+	ApplyTokenRefreshStatus(account, status)
 }
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）

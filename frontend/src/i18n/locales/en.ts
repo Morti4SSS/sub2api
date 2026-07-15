@@ -3282,6 +3282,15 @@ export default {
         expiresAt: 'Expires At',
         actions: 'Actions'
       },
+      tokenStatus: {
+        success: 'Success',
+        failed: 'Failed',
+        noRecord: 'No record',
+        manual: 'Manual',
+        background: 'Background',
+        lastAttempt: 'Last',
+        nextWindow: 'Next'
+      },
       schedulerScore: {
         baseShort: 'Base',
         stickyShort: 'Sticky',

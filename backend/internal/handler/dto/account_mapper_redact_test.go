@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -69,7 +70,17 @@ func TestAccountFromServiceShallow_BuildsTokenStatusWithoutSecrets(t *testing.T)
 			"access_token":  "at-secret",
 			"refresh_token": "rt-secret",
 		},
-		ErrorMessage: "Token refresh failed (non-retryable): invalid_refresh_token",
+		Extra: map[string]any{
+			service.TokenRefreshStatusExtraKey: map[string]any{
+				"last_attempt_at":   "2026-07-15T12:00:00Z",
+				"last_result":       "failed",
+				"trigger":           "background",
+				"error":             "invalid_refresh_token access_token=***",
+				"next_window_start": "2026-07-15T12:05:00Z",
+				"next_window_end":   "2026-07-15T12:10:00Z",
+			},
+		},
+		ErrorMessage: "This field must not be used to infer refresh success",
 	}
 
 	got := AccountFromServiceShallow(src)
@@ -77,8 +88,11 @@ func TestAccountFromServiceShallow_BuildsTokenStatusWithoutSecrets(t *testing.T)
 	require.NotNil(t, got.TokenStatus)
 	require.Equal(t, "present", got.TokenStatus.AccessToken)
 	require.Equal(t, "present", got.TokenStatus.RefreshToken)
-	require.Equal(t, "failed", got.TokenStatus.RefreshState)
-	require.Contains(t, got.TokenStatus.Message, "invalid_refresh_token")
+	require.Equal(t, "failed", got.TokenStatus.LastResult)
+	require.Equal(t, "background", got.TokenStatus.Trigger)
+	require.Contains(t, got.TokenStatus.Error, "invalid_refresh_token")
+	require.Equal(t, "2026-07-15T12:00:00Z", got.TokenStatus.LastAttemptAt.Format(time.RFC3339))
+	require.Equal(t, "2026-07-15T12:05:00Z", got.TokenStatus.NextWindowStart.Format(time.RFC3339))
 
 	raw, err := json.Marshal(got)
 	require.NoError(t, err)
@@ -86,7 +100,7 @@ func TestAccountFromServiceShallow_BuildsTokenStatusWithoutSecrets(t *testing.T)
 	require.NotContains(t, string(raw), "rt-secret")
 }
 
-func TestAccountFromServiceShallow_BuildsManualTokenStatusWhenRefreshMissing(t *testing.T) {
+func TestAccountFromServiceShallow_DoesNotInferRefreshResultWithoutAudit(t *testing.T) {
 	src := &service.Account{
 		ID:       44,
 		Name:     "manual-demo",
@@ -101,7 +115,24 @@ func TestAccountFromServiceShallow_BuildsManualTokenStatusWhenRefreshMissing(t *
 	require.NotNil(t, got.TokenStatus)
 	require.Equal(t, "present", got.TokenStatus.AccessToken)
 	require.Equal(t, "missing", got.TokenStatus.RefreshToken)
-	require.Equal(t, "manual", got.TokenStatus.RefreshState)
+	require.Empty(t, got.TokenStatus.LastResult)
+	require.Empty(t, got.TokenStatus.Trigger)
+	require.Nil(t, got.TokenStatus.LastAttemptAt)
+}
+
+func TestAccountFromServiceShallow_SkipsTokenStatusForAPIKey(t *testing.T) {
+	src := &service.Account{
+		ID:       46,
+		Name:     "api-key-demo",
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "sk-secret",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.Nil(t, got.TokenStatus)
 }
 
 func TestAccountFromServiceShallow_SkipsTokenStatusForOtherPlatforms(t *testing.T) {

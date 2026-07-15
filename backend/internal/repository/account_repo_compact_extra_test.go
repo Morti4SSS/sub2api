@@ -1,6 +1,10 @@
 package repository
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
+)
 
 func TestShouldEnqueueSchedulerOutboxForExtraUpdates_CompactCapabilityKeysAreRelevant(t *testing.T) {
 	updates := map[string]any{
@@ -21,5 +25,15 @@ func TestShouldEnqueueSchedulerOutboxForExtraUpdates_OpenAIResponsesCapabilityKe
 
 	if !shouldEnqueueSchedulerOutboxForExtraUpdates(updates) {
 		t.Fatalf("expected responses capability updates to enqueue scheduler outbox")
+	}
+}
+
+func TestShouldEnqueueSchedulerOutboxForExtraUpdates_TokenRefreshStatusIsNeutral(t *testing.T) {
+	updates := map[string]any{
+		service.TokenRefreshStatusExtraKey: map[string]any{"last_result": "success"},
+	}
+
+	if shouldEnqueueSchedulerOutboxForExtraUpdates(updates) {
+		t.Fatal("token refresh audit must not trigger a scheduler rebuild")
 	}
 }

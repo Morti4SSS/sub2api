@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -60,6 +61,7 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	tokenRefreshConfig      *config.TokenRefreshConfig
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -77,7 +79,12 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	configs ...*config.Config,
 ) *AccountHandler {
+	var tokenRefreshConfig *config.TokenRefreshConfig
+	if len(configs) > 0 && configs[0] != nil {
+		tokenRefreshConfig = &configs[0].TokenRefresh
+	}
 	return &AccountHandler{
 		adminService:            adminService,
 		oauthService:            oauthService,
@@ -92,6 +99,7 @@ func NewAccountHandler(
 		sessionLimitCache:       sessionLimitCache,
 		rpmCache:                rpmCache,
 		tokenCacheInvalidator:   tokenCacheInvalidator,
+		tokenRefreshConfig:      tokenRefreshConfig,
 	}
 }
 
@@ -1092,7 +1100,7 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
-func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
+func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (updatedAccount *service.Account, warning string, retErr error) {
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
@@ -1101,6 +1109,16 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	if account.IsCredentialShadow() {
 		return nil, "", infraerrors.BadRequest("SPARK_SHADOW_NO_REFRESH",
 			"cannot refresh spark shadow account; its credentials are managed by the parent account")
+	}
+	attemptedAt := time.Now()
+	if service.ShouldTrackTokenRefreshStatus(account) {
+		defer func() {
+			auditAccount := account
+			if updatedAccount != nil {
+				auditAccount = updatedAccount
+			}
+			h.recordManualTokenRefreshStatus(ctx, auditAccount, retErr, attemptedAt)
+		}()
 	}
 
 	var newCredentials map[string]any
@@ -1197,11 +1215,11 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 		}
 	}
 
-	updatedAccount, err := h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
+	updatedAccount, retErr = h.adminService.UpdateAccount(ctx, account.ID, &service.UpdateAccountInput{
 		Credentials: newCredentials,
 	})
-	if err != nil {
-		return nil, "", err
+	if retErr != nil {
+		return nil, "", retErr
 	}
 
 	// 刷新成功后，清除 token 缓存，确保下次请求使用新 token
@@ -1217,6 +1235,35 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	h.adminService.EnsureAntigravityPrivacy(ctx, updatedAccount)
 
 	return updatedAccount, "", nil
+}
+
+func (h *AccountHandler) recordManualTokenRefreshStatus(ctx context.Context, account *service.Account, refreshErr error, attemptedAt time.Time) {
+	if h == nil || h.adminService == nil || !service.ShouldTrackTokenRefreshStatus(account) {
+		return
+	}
+	checkInterval := service.DefaultTokenRefreshCheckInterval
+	refreshWindow := service.DefaultTokenRefreshBeforeExpiry
+	if h.tokenRefreshConfig != nil {
+		if h.tokenRefreshConfig.CheckIntervalMinutes > 0 {
+			checkInterval = time.Duration(h.tokenRefreshConfig.CheckIntervalMinutes) * time.Minute
+		}
+		if h.tokenRefreshConfig.RefreshBeforeExpiryHours >= 0 {
+			refreshWindow = time.Duration(h.tokenRefreshConfig.RefreshBeforeExpiryHours * float64(time.Hour))
+		}
+	}
+	status := service.BuildTokenRefreshStatus(
+		account,
+		service.TokenRefreshTriggerManual,
+		refreshErr,
+		attemptedAt,
+		refreshWindow,
+		checkInterval,
+	)
+	if err := h.adminService.UpdateAccountExtra(ctx, account.ID, service.TokenRefreshStatusExtraUpdate(status)); err != nil {
+		slog.Warn("admin.account.token_refresh_audit_update_failed", "account_id", account.ID, "error", err)
+		return
+	}
+	service.ApplyTokenRefreshStatus(account, status)
 }
 
 // Refresh handles refreshing account credentials
