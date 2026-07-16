@@ -29,9 +29,18 @@ func TestNormalizeAccountTestMode(t *testing.T) {
 
 func TestCreateOpenAICompactProbePayloadUsesSubstantivePrompt(t *testing.T) {
 	payload := createOpenAICompactProbePayload("gpt-5.4")
-	input := payload["input"].([]any)
-	message := input[0].(map[string]any)
-	prompt := message["content"].(string)
+	input, ok := payload["input"].([]any)
+	if !ok || len(input) != 1 {
+		t.Fatalf("compact probe input = %#v, want one message", payload["input"])
+	}
+	message, ok := input[0].(map[string]any)
+	if !ok {
+		t.Fatalf("compact probe message = %#v, want object", input[0])
+	}
+	prompt, ok := message["content"].(string)
+	if !ok {
+		t.Fatalf("compact probe content = %#v, want string", message["content"])
+	}
 
 	if prompt != defaultOpenAITextTestPrompt {
 		t.Fatalf("compact probe prompt = %q, want %q", prompt, defaultOpenAITextTestPrompt)
