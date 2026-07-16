@@ -24,7 +24,8 @@ vi.mock('@/composables/useClipboard', () => ({
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   const messages: Record<string, string> = {
-    'admin.accounts.imagePromptDefault': 'Generate a cute orange cat astronaut sticker on a clean pastel background.'
+    'admin.accounts.imagePromptDefault': 'Generate a cute orange cat astronaut sticker on a clean pastel background.',
+    'admin.accounts.defaultConnectionTestPrompt': '请用两句话说明：调用第三方模型接口时，如何区分模型可用、模型不存在和上游限流这三种结果？'
   }
   return {
     ...actual,
@@ -32,6 +33,9 @@ vi.mock('vue-i18n', async () => {
       t: (key: string, params?: Record<string, string | number>) => {
         if (key === 'admin.accounts.imageReceived' && params?.count) {
           return `received-${params.count}`
+        }
+        if (key === 'admin.accounts.sendingTestMessage') {
+          return `sending-${params?.prompt || ''}`
         }
         return messages[key] || key
       }
@@ -187,8 +191,10 @@ describe('AccountTestModal', () => {
     getAvailableModels.mockResolvedValue([
       { id: 'claude-sonnet-4-5', display_name: 'Claude Sonnet 4.5' }
     ])
+    const testPrompt = '请简要说明本次模型调用是否成功，并给出判断结果的依据。'
     global.fetch = vi.fn().mockResolvedValue(
       createStreamResponse([
+        'data: {"type":"test_start","model":"claude-sonnet-4-5"}\n',
         'data: {"type":"test_complete","success":true}\n'
       ])
     ) as any
@@ -206,7 +212,7 @@ describe('AccountTestModal', () => {
     ;(wrapper.vm as any).selectedModelId = 'claude-sonnet-4-5'
     const promptInput = wrapper.find('textarea.textarea-stub')
     expect(promptInput.exists()).toBe(true)
-    await promptInput.setValue('  explain status  ')
+    await promptInput.setValue(`  ${testPrompt}  `)
     await (wrapper.vm as any).startTest()
     await flushPromises()
 
@@ -214,8 +220,35 @@ describe('AccountTestModal', () => {
     const [, request] = (global.fetch as any).mock.calls[0]
     expect(JSON.parse(request.body)).toMatchObject({
       model_id: 'claude-sonnet-4-5',
-      prompt: 'explain status'
+      prompt: testPrompt
     })
+    expect(wrapper.text()).toContain(`sending-${testPrompt}`)
+  })
+
+  it('在发送前拦截打招呼和过短的测试问题', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
+    ])
+
+    const wrapper = mountModal({
+      id: 15,
+      name: 'OpenAI Relay',
+      platform: 'openai',
+      type: 'apikey',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    const promptInput = wrapper.find('textarea.textarea-stub')
+    for (const prompt of ['hi', '你好', '一乘任何数都是一吗']) {
+      await promptInput.setValue(prompt)
+      await (wrapper.vm as any).startTest()
+
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('admin.accounts.testPromptProbeRejected')
+    }
   })
 
   it('OpenAI Compact 探测会携带 compact 测试模式', async () => {

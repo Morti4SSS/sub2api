@@ -31,7 +31,7 @@ func createOpenAICompactProbePayload(model string) map[string]any {
 			map[string]any{
 				"type":    "message",
 				"role":    "user",
-				"content": "Respond with OK.",
+				"content": defaultOpenAITextTestPrompt,
 			},
 		},
 	}

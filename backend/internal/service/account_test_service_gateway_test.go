@@ -146,7 +146,8 @@ func TestAccountTestServiceOpenAIUsesFixedProductionGatewayAndCodexIdentity(t *t
 	svc := &AccountTestService{accountRepo: repo, openAIGatewayService: openAIGateway}
 	c, recorder := newTestContext()
 
-	err := svc.TestAccountConnection(c, account.ID, "gpt-5.4", "", AccountTestModeDefault)
+	testPrompt := "请简要说明本次模型调用是否成功，并给出判断结果的依据。"
+	err := svc.TestAccountConnection(c, account.ID, "gpt-5.4", testPrompt, AccountTestModeDefault)
 
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
@@ -157,14 +158,21 @@ func TestAccountTestServiceOpenAIUsesFixedProductionGatewayAndCodexIdentity(t *t
 	input := body["input"].([]any)
 	content := input[0].(map[string]any)["content"].([]any)
 	prompt := content[0].(map[string]any)["text"].(string)
-	require.Equal(t, defaultOpenAITextTestPrompt, prompt)
-	require.NotContains(t, []string{"hi", "hello", "ping", "test"}, strings.ToLower(prompt))
+	require.Equal(t, testPrompt, prompt)
 	require.Contains(t, recorder.Body.String(), `"type":"diagnostics"`)
 	require.Contains(t, recorder.Body.String(), `"account_id":302`)
 	require.Contains(t, recorder.Body.String(), `"client_identity":"codex_cli"`)
 	require.Contains(t, recorder.Body.String(), `"passthrough":true`)
 	require.Contains(t, recorder.Body.String(), `"upstream_http_status":200`)
 	require.Contains(t, recorder.Body.String(), `"success":true`)
+
+	upstream.lastReq = nil
+	upstream.lastBody = nil
+	c, recorder = newTestContext()
+	err = svc.TestAccountConnection(c, account.ID, "gpt-5.4", "hi", AccountTestModeDefault)
+	require.Error(t, err)
+	require.Nil(t, upstream.lastReq)
+	require.Contains(t, recorder.Body.String(), "greeting or probe word")
 }
 
 func TestAccountTestServiceClaudeReportsSanitizedUpstreamModelNotFound(t *testing.T) {

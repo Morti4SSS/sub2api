@@ -4279,7 +4279,7 @@ export default {
       testFailed: 'Test failed',
       connectedToApi: 'Connected to API',
       usingModel: 'Using model: {model}',
-      sendingTestMessage: 'Sending test message: "hi"',
+      sendingTestMessage: 'Sending test question: "{prompt}"',
       sendingImageRequest: 'Sending image generation test request...',
       response: 'Response:',
       startTest: 'Start Test',

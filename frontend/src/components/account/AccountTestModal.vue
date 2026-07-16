@@ -555,7 +555,9 @@ const handleEvent = (event: {
       addLine(
         supportsImageTest.value
             ? t('admin.accounts.sendingImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
+            : testMode.value === 'compact'
+              ? t('admin.accounts.openai.compactTestEnabled')
+              : t('admin.accounts.sendingTestMessage', { prompt: testPrompt.value.trim() }),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')

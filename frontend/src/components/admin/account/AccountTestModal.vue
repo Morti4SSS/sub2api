@@ -75,6 +75,9 @@
           :disabled="status === 'connecting'"
           rows="3"
         />
+        <p v-if="isInvalidTestPrompt" class="text-xs text-red-600 dark:text-red-400">
+          {{ t('admin.accounts.testPromptProbeRejected') }}
+        </p>
       </div>
 
       <!-- Terminal Output -->
@@ -205,10 +208,10 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId"
+          :disabled="status === 'connecting' || !selectedModelId || isInvalidTestPrompt"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            status === 'connecting' || !selectedModelId
+            status === 'connecting' || !selectedModelId || isInvalidTestPrompt
               ? 'cursor-not-allowed bg-primary-400 text-white'
               : status === 'success'
                 ? 'bg-green-500 text-white hover:bg-green-600'
@@ -282,7 +285,8 @@ const streamingContent = ref('')
 const errorMessage = ref('')
 const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
-const testPrompt = ref('')
+const defaultTextTestPrompt = t('admin.accounts.defaultConnectionTestPrompt')
+const testPrompt = ref(defaultTextTestPrompt)
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
 const generatedImages = ref<PreviewImage[]>([])
@@ -294,6 +298,15 @@ const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
 ])
+const minimumTestPromptCharacters = 24
+const probePrompts = new Set(['hi', 'hello', '你好', '您好', '嗨', '哈喽', 'ping', 'test'])
+const isInvalidTestPrompt = computed(() => {
+  if (testMode.value === 'compact' || (!supportsImageTest.value && !supportsTextPrompt.value)) {
+    return false
+  }
+  const normalized = testPrompt.value.trim()
+  return probePrompts.has(normalized.toLowerCase()) || Array.from(normalized).length < minimumTestPromptCharacters
+})
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const supportsGeminiImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
@@ -326,7 +339,7 @@ watch(
   () => props.show,
   async (newVal) => {
     if (newVal && props.account) {
-      testPrompt.value = ''
+      testPrompt.value = defaultTextTestPrompt
       testMode.value = 'default'
       resetState()
       await loadAvailableModels()
@@ -337,8 +350,11 @@ watch(
 )
 
 watch(selectedModelId, () => {
-  if (supportsImageTest.value && !testPrompt.value.trim()) {
-    testPrompt.value = t('admin.accounts.imagePromptDefault')
+  const imagePrompt = t('admin.accounts.imagePromptDefault')
+  if (supportsImageTest.value && (!testPrompt.value.trim() || testPrompt.value === defaultTextTestPrompt)) {
+    testPrompt.value = imagePrompt
+  } else if (!supportsImageTest.value && testPrompt.value === imagePrompt) {
+    testPrompt.value = defaultTextTestPrompt
   }
 })
 
@@ -407,6 +423,13 @@ const scrollToBottom = async () => {
 
 const startTest = async () => {
   if (!props.account || !selectedModelId.value) return
+  if (isInvalidTestPrompt.value) {
+    resetState()
+    status.value = 'error'
+    errorMessage.value = t('admin.accounts.testPromptProbeRejected')
+    addLine(errorMessage.value, 'text-red-400')
+    return
+  }
 
   resetState()
   status.value = 'connecting'
@@ -419,7 +442,9 @@ const startTest = async () => {
   abortController = new AbortController()
 
   try {
-    const requestPrompt = (supportsImageTest.value || supportsTextPrompt.value) ? testPrompt.value.trim() : ''
+    const requestPrompt = testMode.value === 'compact'
+      ? ''
+      : (supportsImageTest.value || supportsTextPrompt.value) ? testPrompt.value.trim() : ''
     const requestBody: {
       model_id: string
       prompt: string
@@ -510,7 +535,9 @@ const handleEvent = (event: {
       addLine(
         supportsImageTest.value
             ? t('admin.accounts.sendingImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
+            : testMode.value === 'compact'
+              ? t('admin.accounts.openai.compactTestEnabled')
+              : t('admin.accounts.sendingTestMessage', { prompt: testPrompt.value.trim() }),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')
