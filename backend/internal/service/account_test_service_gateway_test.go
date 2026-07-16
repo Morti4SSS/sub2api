@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -17,14 +18,19 @@ import (
 )
 
 func TestNormalizeAccountTestPromptRejectsProbeWords(t *testing.T) {
-	for _, prompt := range []string{"hi", "hello", "ping", "test", " HI "} {
+	for _, prompt := range []string{"hi", "hello", "你好", "您好", "嗨", "哈喽", "ping", "test", " HI "} {
 		_, err := normalizeAccountTestPrompt(prompt, defaultClaudeTestPrompt)
 		require.Error(t, err, prompt)
 	}
 
-	normalized, err := normalizeAccountTestPrompt("  Explain why this API connection is working.  ", defaultClaudeTestPrompt)
+	_, err := normalizeAccountTestPrompt("请说明接口是否可用？", defaultClaudeTestPrompt)
+	require.Error(t, err)
+
+	normalized, err := normalizeAccountTestPrompt("  请简要说明本次模型调用是否成功，并给出判断结果的依据。  ", defaultClaudeTestPrompt)
 	require.NoError(t, err)
-	require.Equal(t, "Explain why this API connection is working.", normalized)
+	require.Equal(t, "请简要说明本次模型调用是否成功，并给出判断结果的依据。", normalized)
+	require.GreaterOrEqual(t, utf8.RuneCountInString(defaultClaudeTestPrompt), 24)
+	require.GreaterOrEqual(t, utf8.RuneCountInString(defaultOpenAITextTestPrompt), 24)
 }
 
 func TestAccountTestServiceClaudeUsesFixedProductionGateway(t *testing.T) {

@@ -151,7 +151,7 @@ describe('AccountTestModal', () => {
     })
   })
 
-  it('uses a complete default question instead of a probe word', async () => {
+  it('uses a substantial default question instead of a greeting or probe word', async () => {
     const wrapper = mount(AccountTestModal, {
       props: { show: true, account: buildAccount() },
       global: {
@@ -166,11 +166,11 @@ describe('AccountTestModal', () => {
 
     const [, options] = (global.fetch as any).mock.calls[0]
     const prompt = JSON.parse(options.body).prompt
-    expect(prompt.length).toBeGreaterThan(20)
-    expect(['hi', 'hello', 'ping', 'test']).not.toContain(prompt.toLowerCase())
+    expect(Array.from(prompt).length).toBeGreaterThanOrEqual(24)
+    expect(['hi', 'hello', '你好', '您好', '嗨', '哈喽', 'ping', 'test']).not.toContain(prompt.toLowerCase())
   })
 
-  it('blocks explicit probe words before sending the request', async () => {
+  it('blocks greetings and undersized prompts before sending the request', async () => {
     const wrapper = mount(AccountTestModal, {
       props: { show: true, account: buildAccount() },
       global: {
@@ -180,11 +180,13 @@ describe('AccountTestModal', () => {
 
     await flushPromises()
     ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
-    await wrapper.get('textarea').setValue('hi')
-    await (wrapper.vm as any).startTest()
+    for (const prompt of ['hi', '你好', '请说明接口是否可用？']) {
+      await wrapper.get('textarea').setValue(prompt)
+      await (wrapper.vm as any).startTest()
 
-    expect(global.fetch).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('admin.accounts.testPromptProbeRejected')
+      expect(global.fetch).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('admin.accounts.testPromptProbeRejected')
+    }
   })
 
   it('sends custom prompt for text account tests', async () => {
@@ -213,7 +215,7 @@ describe('AccountTestModal', () => {
     ;(wrapper.vm as any).selectedModelId = 'claude-sonnet-4-5'
     const textarea = wrapper.find('textarea')
     expect(textarea.exists()).toBe(true)
-    await textarea.setValue('  explain status  ')
+    await textarea.setValue('  请简要说明本次模型调用是否成功，并给出判断结果的依据。  ')
     await (wrapper.vm as any).startTest()
     await flushPromises()
 
@@ -221,7 +223,7 @@ describe('AccountTestModal', () => {
     const [, options] = (global.fetch as any).mock.calls[0]
     expect(JSON.parse(options.body)).toMatchObject({
       model_id: 'claude-sonnet-4-5',
-      prompt: 'explain status'
+      prompt: '请简要说明本次模型调用是否成功，并给出判断结果的依据。'
     })
   })
 

@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -113,12 +114,24 @@ func describeAccountTestGatewayError(err error, gatewayContext *gin.Context, res
 }
 
 const (
-	defaultClaudeTestPrompt      = "In one complete sentence, explain why a reliable API connection matters."
-	defaultOpenAITextTestPrompt  = "In one complete sentence, explain why a reliable API connection matters."
+	minimumAccountTestPromptCharacters = 24
+	defaultClaudeTestPrompt             = "Please explain in two concise sentences how you would distinguish a successful model response, a missing model route, and an upstream rate-limit error."
+	defaultOpenAITextTestPrompt         = "Please explain in two concise sentences how you would distinguish a successful model response, a missing model route, and an upstream rate-limit error."
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 )
+
+var accountTestProbePrompts = map[string]struct{}{
+	"hi":    {},
+	"hello": {},
+	"你好":    {},
+	"您好":    {},
+	"嗨":     {},
+	"哈喽":    {},
+	"ping":  {},
+	"test":  {},
+}
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
 func isOpenAIImageModel(model string) bool {
@@ -171,12 +184,14 @@ func normalizeAccountTestPrompt(prompt, fallback string) (string, error) {
 	if normalized == "" {
 		normalized = strings.TrimSpace(fallback)
 	}
-	switch strings.ToLower(normalized) {
-	case "hi", "hello", "ping", "test":
-		return "", fmt.Errorf("test prompt must be a complete question, not a probe word")
-	}
 	if normalized == "" {
 		return "", fmt.Errorf("test prompt must not be empty")
+	}
+	if _, isProbe := accountTestProbePrompts[strings.ToLower(normalized)]; isProbe {
+		return "", fmt.Errorf("test prompt must be a complete question, not a greeting or probe word")
+	}
+	if utf8.RuneCountInString(normalized) < minimumAccountTestPromptCharacters {
+		return "", fmt.Errorf("test prompt must contain at least %d characters", minimumAccountTestPromptCharacters)
 	}
 	return normalized, nil
 }

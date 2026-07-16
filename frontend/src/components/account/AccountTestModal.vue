@@ -86,7 +86,7 @@
           :disabled="status === 'connecting'"
           rows="3"
         />
-        <p v-if="isProbePrompt" class="text-xs text-red-600 dark:text-red-400">
+        <p v-if="isInvalidTestPrompt" class="text-xs text-red-600 dark:text-red-400">
           {{ t('admin.accounts.testPromptProbeRejected') }}
         </p>
       </div>
@@ -219,10 +219,10 @@
         </button>
         <button
           @click="startTest"
-          :disabled="status === 'connecting' || !selectedModelId || isProbePrompt"
+          :disabled="status === 'connecting' || !selectedModelId || isInvalidTestPrompt"
           :class="[
             'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all',
-            status === 'connecting' || !selectedModelId || isProbePrompt
+            status === 'connecting' || !selectedModelId || isInvalidTestPrompt
               ? 'cursor-not-allowed bg-primary-400 text-white'
               : status === 'success'
                 ? 'bg-green-500 text-white hover:bg-green-600'
@@ -310,10 +310,15 @@ const compactTestEnabled = computed({
     testMode.value = enabled ? 'compact' : 'default'
   }
 })
-const probePrompts = new Set(['hi', 'hello', 'ping', 'test'])
-const isProbePrompt = computed(() =>
-  testMode.value !== 'compact' && probePrompts.has(testPrompt.value.trim().toLowerCase())
-)
+const minimumTestPromptCharacters = 24
+const probePrompts = new Set(['hi', 'hello', '你好', '您好', '嗨', '哈喽', 'ping', 'test'])
+const isInvalidTestPrompt = computed(() => {
+  if (testMode.value === 'compact' || (!supportsImageTest.value && !supportsTextPrompt.value)) {
+    return false
+  }
+  const normalized = testPrompt.value.trim()
+  return probePrompts.has(normalized.toLowerCase()) || Array.from(normalized).length < minimumTestPromptCharacters
+})
 const previewImageUrl = ref('')
 const prioritizedGeminiModels = ['gemini-3.1-flash-image', 'gemini-2.5-flash-image', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-flash-preview', 'gemini-3-pro-preview', 'gemini-2.0-flash']
 const supportsGeminiImageTest = computed(() => {
@@ -431,7 +436,7 @@ const scrollToBottom = async () => {
 
 const startTest = async () => {
   if (!props.account || !selectedModelId.value) return
-  if (isProbePrompt.value) {
+  if (isInvalidTestPrompt.value) {
     resetState()
     status.value = 'error'
     errorMessage.value = t('admin.accounts.testPromptProbeRejected')
