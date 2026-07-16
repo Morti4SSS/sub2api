@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestNormalizeAccountTestMode(t *testing.T) {
@@ -23,6 +24,20 @@ func TestNormalizeAccountTestMode(t *testing.T) {
 		if got := normalizeAccountTestMode(tt.input); got != tt.want {
 			t.Fatalf("normalizeAccountTestMode(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestCreateOpenAICompactProbePayloadUsesSubstantivePrompt(t *testing.T) {
+	payload := createOpenAICompactProbePayload("gpt-5.4")
+	input := payload["input"].([]any)
+	message := input[0].(map[string]any)
+	prompt := message["content"].(string)
+
+	if prompt != defaultOpenAITextTestPrompt {
+		t.Fatalf("compact probe prompt = %q, want %q", prompt, defaultOpenAITextTestPrompt)
+	}
+	if utf8.RuneCountInString(prompt) < minimumAccountTestPromptCharacters {
+		t.Fatalf("compact probe prompt is too short: %q", prompt)
 	}
 }
 
