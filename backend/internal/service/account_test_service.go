@@ -113,25 +113,15 @@ func describeAccountTestGatewayError(err error, gatewayContext *gin.Context, res
 	return message, true
 }
 
+const minimumAccountTestPromptCharacters = 24
+
 const (
-	minimumAccountTestPromptCharacters = 24
-	defaultClaudeTestPrompt             = "Please explain in two concise sentences how you would distinguish a successful model response, a missing model route, and an upstream rate-limit error."
-	defaultOpenAITextTestPrompt         = "Please explain in two concise sentences how you would distinguish a successful model response, a missing model route, and an upstream rate-limit error."
+	defaultClaudeTestPrompt      = "Please explain in two concise sentences how you would distinguish a successful model response, a missing model route, and an upstream rate-limit error."
+	defaultOpenAITextTestPrompt  = "Please explain in two concise sentences how you would distinguish a successful model response, a missing model route, and an upstream rate-limit error."
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 )
-
-var accountTestProbePrompts = map[string]struct{}{
-	"hi":    {},
-	"hello": {},
-	"你好":    {},
-	"您好":    {},
-	"嗨":     {},
-	"哈喽":    {},
-	"ping":  {},
-	"test":  {},
-}
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
 func isOpenAIImageModel(model string) bool {
@@ -187,7 +177,8 @@ func normalizeAccountTestPrompt(prompt, fallback string) (string, error) {
 	if normalized == "" {
 		return "", fmt.Errorf("test prompt must not be empty")
 	}
-	if _, isProbe := accountTestProbePrompts[strings.ToLower(normalized)]; isProbe {
+	switch strings.ToLower(normalized) {
+	case "hi", "hello", "你好", "您好", "嗨", "哈喽", "ping", "test":
 		return "", fmt.Errorf("test prompt must be a complete question, not a greeting or probe word")
 	}
 	if utf8.RuneCountInString(normalized) < minimumAccountTestPromptCharacters {
