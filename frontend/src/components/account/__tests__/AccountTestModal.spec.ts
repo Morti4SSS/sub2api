@@ -272,7 +272,7 @@ describe('AccountTestModal', () => {
   it('renders fixed-account gateway diagnostics from test SSE', async () => {
     const encoder = new TextEncoder()
     const chunks = [
-      encoder.encode('data: {"type":"diagnostics","data":{"account_id":301,"account_name":"Claude relay A","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"claude-opus-4-8","upstream_model":"glm-5.2","passthrough":true,"thinking_source_effort":"max","thinking_target_field":"reasoning_effort","thinking_target_value":"on","upstream_http_status":200}}\n\n'),
+      encoder.encode('data: {"type":"diagnostics","data":{"account_id":301,"account_name":"Claude relay A","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"glm-5.2","upstream_model":"glm-5.2","passthrough":true,"upstream_http_status":200}}\n\n'),
       encoder.encode('data: {"type":"test_complete","success":true}\n\n')
     ]
     global.fetch = vi.fn().mockResolvedValue({
@@ -301,15 +301,14 @@ describe('AccountTestModal', () => {
 
     expect(wrapper.text()).toContain('Claude relay A (#301)')
     expect(wrapper.text()).toContain('claude_code_cli')
-    expect(wrapper.text()).toContain('claude-opus-4-8 -> glm-5.2')
-    expect(wrapper.text()).toContain('max -> reasoning_effort=on')
+    expect(wrapper.text()).toContain('glm-5.2 -> glm-5.2')
     expect(wrapper.text()).toContain('HTTP 200')
   })
 
   it('renders sanitized upstream error diagnostics from a failed test', async () => {
     const encoder = new TextEncoder()
     const chunks = [
-      encoder.encode('data: {"type":"diagnostics","data":{"account_id":303,"account_name":"Claude relay failure","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"claude-opus-4-8","upstream_model":"glm-5.2","passthrough":true,"upstream_http_status":404,"upstream_error_code":"upstream_model_not_found","upstream_error_reason":"model glm-5.2 not found; api_key=***"}}\n\n'),
+      encoder.encode('data: {"type":"diagnostics","data":{"account_id":303,"account_name":"Claude relay failure","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"glm-5.2","upstream_model":"glm-5.2","passthrough":true,"upstream_http_status":404,"upstream_error_code":"upstream_model_not_found","upstream_error_reason":"model glm-5.2 not found; api_key=***"}}\n\n'),
       encoder.encode('data: {"type":"error","error":"Connection test failed"}\n\n')
     ]
     global.fetch = vi.fn().mockResolvedValue({
@@ -332,7 +331,7 @@ describe('AccountTestModal', () => {
     })
 
     await flushPromises()
-    ;(wrapper.vm as any).selectedModelId = 'claude-opus-4-8'
+    ;(wrapper.vm as any).selectedModelId = 'glm-5.2'
     await (wrapper.vm as any).startTest()
     await flushPromises()
 

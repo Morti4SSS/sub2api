@@ -32,20 +32,17 @@ func (s *availableModelsAdminService) GetAccount(_ context.Context, id int64) (*
 func setupAvailableModelsRouter(adminSvc service.AdminService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	router.GET("/api/v1/admin/accounts/claude-code/options", handler.GetClaudeCodeOptions)
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router.GET("/api/v1/admin/accounts/:id/models", handler.GetAvailableModels)
 	return router
 }
 
 type syncUpstreamHTTPUpstream struct {
-	resp    *http.Response
-	err     error
-	lastReq *http.Request
+	resp *http.Response
+	err  error
 }
 
 func (u *syncUpstreamHTTPUpstream) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
-	u.lastReq = req
 	if u.err != nil {
 		return nil, u.err
 	}
@@ -71,9 +68,8 @@ func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream servi
 		&config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 		nil,
 	)
-	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, accountTestSvc, nil, nil, nil, nil, nil)
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, accountTestSvc, nil, nil, nil, nil, nil)
 	router.POST("/api/v1/admin/accounts/:id/models/sync-upstream", handler.SyncUpstreamModels)
-	router.POST("/api/v1/admin/accounts/models/sync-upstream-preview", handler.SyncUpstreamModelsPreview)
 	return router
 }
 
@@ -109,65 +105,6 @@ func TestAccountHandlerGetAvailableModels_GrokUsesXAIModels(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Len(t, resp.Data, 1)
 	require.Equal(t, "grok-4.3", resp.Data[0].ID)
-}
-
-func TestAccountHandlerGetClaudeCodeOptionsUsesCanonicalConstants(t *testing.T) {
-	router := setupAvailableModelsRouter(newStubAdminService())
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/claude-code/options", nil)
-
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var resp struct {
-		Data struct {
-			Models []struct {
-				ID string `json:"id"`
-			} `json:"models"`
-			EffortLevels []string `json:"effort_levels"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, resp.Data.EffortLevels)
-	ids := make([]string, 0, len(resp.Data.Models))
-	for _, model := range resp.Data.Models {
-		ids = append(ids, model.ID)
-	}
-	require.Contains(t, ids, "claude-opus-4-8")
-}
-
-func TestAccountHandlerGetAvailableModels_AnthropicRoutesOwnerOnlyReturnsConfiguredShells(t *testing.T) {
-	svc := &availableModelsAdminService{
-		stubAdminService: newStubAdminService(),
-		account: service.Account{
-			ID:       47,
-			Platform: service.PlatformAnthropic,
-			Type:     service.AccountTypeAPIKey,
-			Extra: map[string]any{
-				"claude_code_routes": []any{map[string]any{
-					"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2", "display_name": "Strong model route",
-				}},
-			},
-		},
-	}
-	router := setupAvailableModelsRouter(svc)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
-
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var resp struct {
-		Data []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"display_name"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.Equal(t, []struct {
-		ID          string `json:"id"`
-		DisplayName string `json:"display_name"`
-	}{{ID: "claude-opus-4-8", DisplayName: "Strong model route"}}, resp.Data)
 }
 
 func TestAccountHandlerGetAvailableModels_GrokDefaultsToXAIModelsWithoutMapping(t *testing.T) {
@@ -373,71 +310,4 @@ func TestAccountHandlerSyncUpstreamModels_UpstreamErrorDoesNotExposeBody(t *test
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Contains(t, rec.Body.String(), "Upstream model list request failed with HTTP 502")
 	require.NotContains(t, rec.Body.String(), "SECRET_TOKEN")
-	var responseBody struct {
-		Reason   string            `json:"reason"`
-		Metadata map[string]string `json:"metadata"`
-	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &responseBody))
-	require.Equal(t, "upstream", responseBody.Reason)
-	require.Equal(t, "https://openai.example.com/v1/models", responseBody.Metadata["request_url"])
-	require.Equal(t, "502", responseBody.Metadata["http_status"])
-	require.Equal(t, "application/json", responseBody.Metadata["content_type"])
-}
-
-func TestAccountHandlerSyncUpstreamModelsUsesUnsavedCustomURLOverride(t *testing.T) {
-	svc := &availableModelsAdminService{
-		stubAdminService: newStubAdminService(),
-		account: service.Account{
-			ID:       46,
-			Platform: service.PlatformOpenAI,
-			Type:     service.AccountTypeAPIKey,
-			Credentials: map[string]any{
-				"api_key":  "openai-key",
-				"base_url": "https://openai.example.com/v1",
-			},
-			Extra: map[string]any{"upstream_models_url": "https://old.example.com/models"},
-		},
-	}
-	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-5"}]}`)),
-	}}
-	router := setupSyncUpstreamModelsRouter(svc, upstream)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/admin/accounts/46/models/sync-upstream",
-		strings.NewReader(`{"upstream_models_url":"https://new.example.com/catalog?tenant=private"}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, "https://new.example.com/catalog?tenant=private", upstream.lastReq.URL.String())
-	require.Equal(t, "https://old.example.com/models", svc.account.Extra["upstream_models_url"])
-}
-
-func TestAccountHandlerSyncUpstreamModelsPreviewUsesCustomURL(t *testing.T) {
-	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-5"}]}`)),
-	}}
-	router := setupSyncUpstreamModelsRouter(newStubAdminService(), upstream)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/admin/accounts/models/sync-upstream-preview",
-		strings.NewReader(`{"platform":"openai","type":"apikey","base_url":"https://openai.example.com/v1","api_key":"openai-key","upstream_models_url":"https://relay.example.com/catalog?tenant=private"}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, "https://relay.example.com/catalog?tenant=private", upstream.lastReq.URL.String())
 }

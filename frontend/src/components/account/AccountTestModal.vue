@@ -538,9 +538,6 @@ const handleEvent = (event: {
     requested_model?: string
     upstream_model?: string
     passthrough?: boolean
-    thinking_source_effort?: string
-    thinking_target_field?: string
-    thinking_target_value?: string
     upstream_http_status?: number
     upstream_error_code?: string
     upstream_error_reason?: string
@@ -594,12 +591,6 @@ const handleEvent = (event: {
       }
       if (data.passthrough != null) {
         addLine(`${t('admin.accounts.testDiagnosticPassthrough')}: ${String(data.passthrough)}`, 'text-cyan-300')
-      }
-      if (data.thinking_source_effort && data.thinking_target_field && data.thinking_target_value) {
-        addLine(
-          `${t('admin.accounts.testDiagnosticThinking')}: ${data.thinking_source_effort} -> ${data.thinking_target_field}=${data.thinking_target_value}`,
-          'text-cyan-300'
-        )
       }
       if (data.upstream_http_status != null) {
         addLine(`${t('admin.accounts.testDiagnosticHTTP')}: HTTP ${data.upstream_http_status}`, 'text-cyan-300')

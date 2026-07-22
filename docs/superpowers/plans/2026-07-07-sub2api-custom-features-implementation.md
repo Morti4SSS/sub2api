@@ -1,5 +1,7 @@
 # Sub2API Custom Features Implementation Plan
 
+> **Deprecated:** The private Claude Code model catalog, official-model shell, and effort-mapping work in this plan was removed when upstream `v0.1.163` was merged on 2026-07-22. This file is retained only as implementation history and does not describe current runtime behavior.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rebuild the required Codex / Claude Code custom features on top of `MortiSSS-v0.1.146-r1` without losing upstream mergeability or VPS rollback safety.

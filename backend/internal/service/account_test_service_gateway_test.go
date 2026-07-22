@@ -33,7 +33,7 @@ func TestNormalizeAccountTestPromptRejectsProbeWords(t *testing.T) {
 	require.GreaterOrEqual(t, utf8.RuneCountInString(defaultOpenAITextTestPrompt), 24)
 }
 
-func TestAccountTestServiceClaudeUsesFixedProductionGateway(t *testing.T) {
+func TestAccountTestServiceClaudeUsesFixedProductionGatewayAndRealModelID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := &Account{
 		ID:          301,
@@ -46,15 +46,7 @@ func TestAccountTestServiceClaudeUsesFixedProductionGateway(t *testing.T) {
 			"api_key":  "test-key",
 			"base_url": "https://relay.example.com",
 		},
-		Extra: map[string]any{
-			"anthropic_passthrough": true,
-			"claude_code_routes": []any{map[string]any{
-				"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
-				"thinking": map[string]any{
-					"mode": "levels", "target_field": "reasoning_effort", "levels": []any{"off", "on"},
-				},
-			}},
-		},
+		Extra: map[string]any{"anthropic_passthrough": true},
 	}
 	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{
 		accountsByID: map[int64]*Account{account.ID: account},
@@ -84,7 +76,7 @@ func TestAccountTestServiceClaudeUsesFixedProductionGateway(t *testing.T) {
 	err := svc.TestAccountConnection(
 		c,
 		account.ID,
-		"claude-opus-4-8",
+		"glm-5.2",
 		"Explain why this API connection is working.",
 		AccountTestModeDefault,
 	)
@@ -93,15 +85,13 @@ func TestAccountTestServiceClaudeUsesFixedProductionGateway(t *testing.T) {
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, claude.DefaultHeaders["User-Agent"], upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "glm-5.2", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.Equal(t, "on", gjson.GetBytes(upstream.lastBody, "reasoning_effort").String())
 	require.Equal(t, "Explain why this API connection is working.", gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String())
 	require.Contains(t, recorder.Body.String(), `"type":"diagnostics"`)
 	require.Contains(t, recorder.Body.String(), `"account_id":301`)
 	require.Contains(t, recorder.Body.String(), `"client_identity":"claude_code_cli"`)
-	require.Contains(t, recorder.Body.String(), `"requested_model":"claude-opus-4-8"`)
+	require.Contains(t, recorder.Body.String(), `"requested_model":"glm-5.2"`)
 	require.Contains(t, recorder.Body.String(), `"upstream_model":"glm-5.2"`)
 	require.Contains(t, recorder.Body.String(), `"passthrough":true`)
-	require.Contains(t, recorder.Body.String(), `"thinking_target_value":"on"`)
 	require.Contains(t, recorder.Body.String(), `"upstream_http_status":200`)
 	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
@@ -185,12 +175,7 @@ func TestAccountTestServiceClaudeReportsSanitizedUpstreamModelNotFound(t *testin
 		Status:      StatusActive,
 		Concurrency: 1,
 		Credentials: map[string]any{"api_key": "test-key", "base_url": "https://relay.example.com"},
-		Extra: map[string]any{
-			"anthropic_passthrough": true,
-			"claude_code_routes": []any{map[string]any{
-				"shell_model": "claude-opus-4-8", "upstream_model": "glm-5.2",
-			}},
-		},
+		Extra:       map[string]any{"anthropic_passthrough": true},
 	}
 	repo := &openAIAccountTestRepo{mockAccountRepoForGemini: mockAccountRepoForGemini{
 		accountsByID: map[int64]*Account{account.ID: account},
@@ -209,7 +194,7 @@ func TestAccountTestServiceClaudeReportsSanitizedUpstreamModelNotFound(t *testin
 	svc := &AccountTestService{accountRepo: repo, gatewayService: gateway}
 	c, recorder := newTestContext()
 
-	err := svc.TestAccountConnection(c, account.ID, "claude-opus-4-8", "Explain whether this connection is working.", AccountTestModeDefault)
+	err := svc.TestAccountConnection(c, account.ID, "glm-5.2", "Explain whether this connection is working.", AccountTestModeDefault)
 
 	require.Error(t, err)
 	body := recorder.Body.String()

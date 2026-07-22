@@ -14,6 +14,7 @@ const (
 
 var (
 	clientSummarySensitiveQueryParamRegex = regexp.MustCompile(`(?i)([?&](?:key|api_key|client_secret|access_token|refresh_token|id_token|token)=)[^&"\s]+`)
+	clientSummaryAuthorizationSchemeRegex = regexp.MustCompile(`(?i)\b(authorization)\s*[:=]\s*["']?(?:bearer|basic|token)\s+[^"',\s}]+`)
 	clientSummarySensitivePairRegex       = regexp.MustCompile(`(?i)\b(authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|cookie|token)\s*[:=]\s*["']?[^"',\s}]+`)
 	clientSummaryOpenAISecretRegex        = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}`)
 )
@@ -85,6 +86,7 @@ func sanitizeClientUpstreamErrorSummary(msg string) string {
 		return msg
 	}
 	msg = clientSummarySensitiveQueryParamRegex.ReplaceAllString(msg, `$1***`)
+	msg = clientSummaryAuthorizationSchemeRegex.ReplaceAllString(msg, `$1=***`)
 	msg = clientSummarySensitivePairRegex.ReplaceAllString(msg, `$1=***`)
 	msg = clientSummaryOpenAISecretRegex.ReplaceAllString(msg, `sk-***`)
 	return msg

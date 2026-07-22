@@ -16,57 +16,15 @@
 | --- | --- | --- | --- |
 | 测试词自定义 | OpenAI/Codex 与 Claude/Anthropic 账号测试时使用前端输入的 prompt，空值才回退默认测试词 | 前端测试弹窗、`backend/internal/service/account_test_service.go` | AccountTestModal Vitest、account test Go 单测 |
 | Codex / Claude Code 客户端兼容 | 保留允许客户端的真实 `User-Agent` / `Originator`，隔离会话 ID | OpenAI / OAuth / WS passthrough 服务 | `Test.*Codex.*`、`Test.*ClaudeCode.*`、`Test.*Passthrough.*` |
-| Claude Code 模型映射 | 让 Claude Code `/model` 看到可读的映射模型，并把请求模型转成上游模型 | `extra.claude_code_model_catalog`、Claude Code gateway 路径 | `/v1/models`、Claude Code 请求转发单测 |
-| Claude Code 思考强度映射 | 把 `low/medium/high/xhigh/max` 映射到上游支持的字段和值 | `extra.claude_code_effort_mapping`、Claude Code gateway 路径 | effort mapping 单测、请求体断言 |
 | 账号 AT/RT 状态 | 管理端账号列表紧凑显示 OpenAI/Codex 与 Claude 账号 access / refresh token 状态，不显示原文 | account DTO、账号列表前端列 | DTO redaction 单测、AccountTokenStatusCell Vitest |
 | 上游错误摘要 | OpenAI/Codex 与 Claude failover 耗尽时返回脱敏的上游错误摘要，避免只看到 sub2api 泛化错误 | `UpstreamFailoverError`、错误摘要 helper、gateway handlers | upstream_error_summary Go 单测、handler 单测 |
 | 轮换可读标识 | 保留官方已有账号池、调度、临时不可调度等状态，不因自定义改动覆盖 | account DTO、admin account list | 账号列表人工检查、已有 handler/dto 单测 |
 
-## 配置契约
+## Claude Code 模型行为
 
-自定义配置集中放在账号 `extra`，避免新增数据库表和迁移。
-
-### `extra.claude_code_model_catalog`
-
-用于 Claude Code CLI 的可见模型目录和请求模型映射。
-
-```json
-{
-  "claude_code_model_catalog": [
-    {
-      "role": "sonnet",
-      "request_model": "cc-relay-sonnet",
-      "display_name": "Relay Sonnet",
-      "upstream_model": "provider-sonnet",
-      "supports_1m": false,
-      "capabilities": ["thinking"]
-    }
-  ]
-}
-```
-
-### `extra.claude_code_effort_mapping`
-
-用于把 Claude Code 的思考强度档位折叠到上游实际支持的字段和值。
-
-```json
-{
-  "claude_code_effort_mapping": {
-    "cc-relay-sonnet": {
-      "target_field": "output_config.effort",
-      "values": {
-        "low": "low",
-        "medium": "medium",
-        "high": "high",
-        "xhigh": "high",
-        "max": "high"
-      }
-    }
-  }
-}
-```
-
-允许多个 Claude Code 档位映射到同一个上游值。完全未配置时保持官方行为或使用代码中明确的安全默认，不注入未知字段。
+- 不维护私有 Claude Code 模型目录、官方模型外壳或账号级思考强度映射。
+- Claude Code 通过本地配置直接发送中转站支持的真实模型 ID；Sub2API 不尝试改变 Claude Code `/model` 的显示内容。
+- 官方已有的通用模型映射、协议转换和 OpenAI reasoning 策略保持原样，不属于本仓库私有契约。
 
 ## 跟进官方更新流程
 
@@ -82,7 +40,7 @@ cd backend
 go test ./internal/service ./internal/handler ./internal/handler/dto -count=1
 
 cd ..\frontend
-pnpm vitest run src/components/account/__tests__/AccountTestModal.spec.ts src/components/admin/account/__tests__/AccountTestModal.spec.ts src/components/account/__tests__/claudeCodeConfig.spec.ts src/components/account/__tests__/AccountTokenStatusCell.spec.ts
+pnpm vitest run src/components/account/__tests__/AccountTestModal.spec.ts src/components/admin/account/__tests__/AccountTestModal.spec.ts src/components/account/__tests__/AccountTokenStatusCell.spec.ts
 pnpm typecheck
 pnpm build
 

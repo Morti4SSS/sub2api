@@ -48,7 +48,8 @@ const MessageBetaHeaderWithTools = BetaClaudeCode + "," + BetaOAuth + "," + Beta
 // CountTokensBetaHeader count_tokens 请求使用的 anthropic-beta header
 const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaTokenCounting
 
-// HaikuBetaHeader Haiku 模型使用的 anthropic-beta header（不需要 claude-code beta）
+// HaikuBetaHeader Haiku 模型在 OAuth 真实客户端透传路径上的默认 anthropic-beta header。
+// OAuth mimic 路径统一使用 FullClaudeCodeMimicryBetas。
 const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking
 
 // APIKeyBetaHeader API-key 账号建议使用的 anthropic-beta header（不包含 oauth）
@@ -72,8 +73,8 @@ const CLICurrentVersion = "2.1.161"
 // 顺序与真实 CLI 抓包一致。
 //
 // 使用建议：
-//   - OAuth 账号 + 非 haiku：追加这整份列表，再按需保留 client 带来的 beta。
-//   - OAuth 账号 + haiku：Anthropic 对 haiku 不做 third-party 判定，使用 HaikuBetaHeader 即可。
+//   - OAuth mimic：所有模型（包括 Haiku）都使用这整份列表。
+//   - OAuth 真实客户端透传：保留客户端 beta；未提供时使用模型对应默认值。
 //   - API-key 账号：不要使用本函数，参见 APIKeyBetaHeader。
 //   - 不默认加入 redact-thinking，避免上游抹除 thinking 内容；客户端显式传入时由合并逻辑保留。
 func FullClaudeCodeMimicryBetas() []string {
@@ -172,9 +173,6 @@ var DefaultModels = []Model{
 	},
 }
 
-// EffortLevels is the Claude Code source scale used by account thinking mappings.
-var EffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
-
 // DefaultModelIDs 返回默认模型的 ID 列表
 func DefaultModelIDs() []string {
 	ids := make([]string, len(DefaultModels))
@@ -182,16 +180,6 @@ func DefaultModelIDs() []string {
 		ids[i] = m.ID
 	}
 	return ids
-}
-
-// DefaultModelByID returns metadata from the stable Claude Code shell catalog.
-func DefaultModelByID(id string) (Model, bool) {
-	for _, model := range DefaultModels {
-		if model.ID == id {
-			return model, true
-		}
-	}
-	return Model{}, false
 }
 
 // DefaultTestModel 测试时使用的默认模型

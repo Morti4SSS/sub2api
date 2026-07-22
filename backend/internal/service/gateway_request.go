@@ -3,17 +3,16 @@ package service
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -162,6 +161,18 @@ func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr str
 	}
 }
 
+const claudeCodeLongContextModelSuffix = "[1m]"
+
+// Claude Code treats [1m] as a client-side context selector and normally removes it
+// before provider requests. Normalize leaked suffixes, including its duplicated form.
+func normalizeClaudeCodeLongContextModel(model string) string {
+	for len(model) > len(claudeCodeLongContextModelSuffix) &&
+		strings.EqualFold(model[len(model)-len(claudeCodeLongContextModelSuffix):], claudeCodeLongContextModelSuffix) {
+		model = model[:len(model)-len(claudeCodeLongContextModelSuffix)]
+	}
+	return model
+}
+
 // parseGatewayRequestCurrentBody 只做标量和 raw range 轻量解析，不恢复 system/messages 对象图。
 func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) error {
 	if parsed == nil || parsed.Body == nil {
@@ -170,7 +181,7 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 
 	bodyBytes := parsed.Body.Bytes()
 	if !gjson.ValidBytes(bodyBytes) {
-		return fmt.Errorf("invalid json")
+		return DescribeInvalidJSON(bodyBytes)
 	}
 
 	// 只在当前函数内零拷贝读取 JSON 字段；ReplaceBody 后必须重新进入本函数刷新派生状态。
@@ -184,6 +195,19 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 			return fmt.Errorf("invalid model field type")
 		}
 		parsed.Model = modelResult.String()
+		if protocol == domain.PlatformAnthropic {
+			normalizedModel := normalizeClaudeCodeLongContextModel(parsed.Model)
+			if normalizedModel != parsed.Model {
+				normalizedBody, err := sjson.SetBytes(bodyBytes, "model", normalizedModel)
+				if err != nil {
+					return fmt.Errorf("normalize model field: %w", err)
+				}
+				parsed.Body.Replace(normalizedBody)
+				bodyBytes = normalizedBody
+				jsonStr = *(*string)(unsafe.Pointer(&bodyBytes))
+				parsed.Model = normalizedModel
+			}
+		}
 	}
 
 	streamResult := gjson.Get(jsonStr, "stream")
@@ -216,6 +240,26 @@ func parseGatewayRequestCurrentBody(parsed *ParsedRequest, protocol string) erro
 
 func refreshGatewayRequestRanges(parsed *ParsedRequest, protocol string) error {
 	return parseGatewayRequestCurrentBody(parsed, protocol)
+}
+
+// DescribeInvalidJSON returns a diagnostic error for a request body that
+// failed JSON validation. It re-parses with encoding/json (failure path only)
+// to pinpoint the first offending byte, so operators can distinguish genuinely
+// invalid JSON from a truncated / partially consumed body. The error carries
+// only length/offset/character information — never body content — so callers
+// may safely wrap or log it.
+func DescribeInvalidJSON(body []byte) error {
+	var raw json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
+			return fmt.Errorf("invalid json (len=%d, offset=%d): %s", len(body), syntaxErr.Offset, syntaxErr.Error())
+		}
+		return fmt.Errorf("invalid json (len=%d): %w", len(body), err)
+	}
+	// gjson rejected the body but encoding/json accepted it (divergent edge
+	// cases, e.g. certain malformed UTF-8 sequences); report the basics.
+	return fmt.Errorf("invalid json (len=%d)", len(body))
 }
 
 // ParsedRequest 保存网关请求的预解析结果
@@ -1203,166 +1247,6 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 		return &value
 	default:
 		return nil
-	}
-}
-
-func ApplyClaudeCodeEffortMapping(body []byte, account *Account, requestModel string) ([]byte, bool) {
-	if account == nil || account.Extra == nil || strings.TrimSpace(requestModel) == "" {
-		return body, false
-	}
-	if _, hasRoutesOwner := account.Extra["claude_code_routes"]; hasRoutesOwner {
-		route, matched := account.ResolveClaudeCodeRoute(requestModel)
-		if !matched {
-			return body, false
-		}
-		return applyClaudeCodeRouteThinking(body, route.Thinking)
-	}
-
-	rawConfig, ok := account.Extra["claude_code_effort_mapping"].(map[string]any)
-	if !ok {
-		return body, false
-	}
-	modelConfig, ok := rawConfig[strings.TrimSpace(requestModel)].(map[string]any)
-	if !ok {
-		return body, false
-	}
-	targetField := claudeCodeEffortStringValue(modelConfig["target_field"])
-	if targetField == "" {
-		targetField = "output_config.effort"
-	}
-	if !allowedClaudeCodeEffortTargetField(targetField) {
-		return body, false
-	}
-	values, ok := modelConfig["values"].(map[string]any)
-	if !ok {
-		return body, false
-	}
-	effort, ok := claudeCodeEffortForMapping(body, values)
-	if !ok {
-		return body, false
-	}
-	mapped := claudeCodeEffortStringValue(values[effort])
-	if mapped == "" {
-		return body, false
-	}
-	return writeClaudeCodeMappedEffort(body, targetField, mapped)
-}
-
-func claudeCodeEffortForMapping(body []byte, values map[string]any) (string, bool) {
-	if effort := NormalizeClaudeOutputEffort(gjson.GetBytes(body, "output_config.effort").String()); effort != nil {
-		if claudeCodeEffortStringValue(values[*effort]) != "" {
-			return *effort, true
-		}
-	}
-	return "", false
-}
-
-func applyClaudeCodeRouteThinking(body []byte, thinking map[string]any) ([]byte, bool) {
-	if len(thinking) == 0 {
-		return body, false
-	}
-	mode := claudeCodeEffortStringValue(thinking["mode"])
-	if mode != "levels" && mode != "budget" {
-		return body, false
-	}
-	effort := NormalizeClaudeOutputEffort(gjson.GetBytes(body, "output_config.effort").String())
-	if effort == nil {
-		return body, false
-	}
-	targetField := claudeCodeEffortStringValue(thinking["target_field"])
-	if !allowedClaudeCodeEffortTargetField(targetField) {
-		return body, false
-	}
-	if (mode == "budget") != (targetField == "thinking.budget_tokens") {
-		return body, false
-	}
-
-	mapped := ""
-	if overrides, ok := thinking["overrides"].(map[string]any); ok {
-		mapped = claudeCodeEffortStringValue(overrides[*effort])
-	}
-	if mapped == "" {
-		levels := extraStringSliceValue(thinking["levels"])
-		if len(levels) == 0 {
-			return body, false
-		}
-		sourceIndex := -1
-		for index, level := range claude.EffortLevels {
-			if level == *effort {
-				sourceIndex = index
-				break
-			}
-		}
-		if sourceIndex < 0 {
-			return body, false
-		}
-		targetIndex := int(math.Round(float64(sourceIndex*(len(levels)-1)) / float64(len(claude.EffortLevels)-1)))
-		mapped = levels[targetIndex]
-	}
-	return writeClaudeCodeMappedEffort(body, targetField, mapped)
-}
-
-func writeClaudeCodeMappedEffort(body []byte, targetField string, mapped string) ([]byte, bool) {
-	var value any = mapped
-	if targetField == "thinking.budget_tokens" {
-		budget, err := strconv.ParseInt(mapped, 10, 64)
-		if err != nil || budget <= 0 {
-			return body, false
-		}
-		value = budget
-	}
-	modified, err := sjson.SetBytes(body, targetField, value)
-	if err != nil {
-		return body, false
-	}
-	if targetField == "thinking.budget_tokens" {
-		modified, err = sjson.SetBytes(modified, "thinking.type", "enabled")
-		if err != nil {
-			return body, false
-		}
-	}
-	if targetField != "output_config.effort" {
-		modified, err = sjson.DeleteBytes(modified, "output_config.effort")
-		if err != nil {
-			return body, false
-		}
-		outputConfig := gjson.GetBytes(modified, "output_config")
-		if outputConfig.Exists() && outputConfig.IsObject() && len(outputConfig.Map()) == 0 {
-			modified, err = sjson.DeleteBytes(modified, "output_config")
-			if err != nil {
-				return body, false
-			}
-		}
-	}
-	return modified, true
-}
-
-func claudeCodeEffortStringValue(raw any) string {
-	switch v := raw.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case json.Number:
-		return strings.TrimSpace(v.String())
-	case float64:
-		if math.Trunc(v) == v {
-			return strconv.FormatInt(int64(v), 10)
-		}
-		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
-	case int:
-		return strconv.Itoa(v)
-	case int64:
-		return strconv.FormatInt(v, 10)
-	default:
-		return ""
-	}
-}
-
-func allowedClaudeCodeEffortTargetField(field string) bool {
-	switch field {
-	case "output_config.effort", "thinking.budget_tokens", "reasoning_effort", "reasoning.effort":
-		return true
-	default:
-		return false
 	}
 }
 

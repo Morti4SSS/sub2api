@@ -15,14 +15,10 @@ import (
 // account selection failed with ErrNoAvailableAccounts. Handlers obtain it
 // via classifyNoAccountError and choose between:
 //
-//   - 404 model_not_found — a non-Claude-Code group has accounts, but none of them are
+//   - 404 model_not_found — the group has accounts, but none of them are
 //     configured to serve the requested model (config / typo / unsupported
 //     model). Returning 503 here misleads operators and trips reverse-proxy
 //     health checks; 404 lets the client surface the real problem.
-//
-//   - 404 route_not_found — a Claude Code shell is absent from the stable group catalog.
-//
-//   - 503 no_eligible_account — the shell exists, but no enabled account explicitly maps it.
 //
 //   - 503 api_error — accounts that could serve the model exist but are
 //     temporarily exhausted (rate limit, quota auto-pause, runtime block) OR
@@ -42,11 +38,12 @@ type noAccountErrorClassification struct {
 // The classifier intentionally does not consume the original error: the
 // selection layer never tells us *why* the pool came up empty (rate-limited
 // vs. unsupported model are both wrapped as ErrNoAvailableAccounts). Instead
-// we re-check pool composition through DiagnoseModelAvailabilityForPlatform,
-// which only inspects model_mapping configuration and ignores transient
-// state. That guarantees a 404 is only returned when no operator action
-// short of editing the account's model_mapping could make this request
-// succeed.
+// we re-check pool composition through DiagnoseModelAvailabilityForPlatform.
+// Its dedicated database query considers only persistent eligibility
+// (active status + schedulable setting) and model_mapping, bypassing scheduler
+// snapshots and transient filters. That guarantees a 404 is only returned
+// when persistent account/group/model configuration must change before the
+// request can succeed.
 //
 // routingModel is the model name that account selection actually compared
 // against (i.e. after group-level dispatch mapping). displayModel is the
@@ -82,26 +79,6 @@ func classifyNoAccountError(
 		return fallback
 	}
 
-	if service.IsClaudeCodeClient(ctx) && platform == service.PlatformAnthropic {
-		if !apiKey.Group.ExposesClaudeCodeModel(displayModel) {
-			return noAccountErrorClassification{
-				Status:        http.StatusNotFound,
-				ErrType:       "route_not_found",
-				Message:       fmt.Sprintf("Claude Code route %q does not exist in this group", displayModel),
-				ModelNotFound: true,
-			}
-		}
-		result := diag.DiagnoseModelAvailabilityForPlatform(ctx, apiKey.GroupID, routingModel, platform)
-		if !result.HasModelSupport {
-			return noAccountErrorClassification{
-				Status:  http.StatusServiceUnavailable,
-				ErrType: "no_eligible_account",
-				Message: fmt.Sprintf("No enabled account is configured for Claude Code route %q", displayModel),
-			}
-		}
-		return fallback
-	}
-
 	result := diag.DiagnoseModelAvailabilityForPlatform(ctx, apiKey.GroupID, routingModel, platform)
 	if result.HasAccountsInPool && !result.HasModelSupport {
 		return noAccountErrorClassification{
@@ -130,4 +107,32 @@ func classifyNoAccountErrorFromGin(
 		ctx = c.Request.Context()
 	}
 	return classifyNoAccountError(ctx, diag, apiKey, routingModel, displayModel, platform)
+}
+
+func classifyOpenAICompatibleNoAccountErrorFromGin(
+	c *gin.Context,
+	diag service.ModelAvailabilityDiagnoser,
+	apiKey *service.APIKey,
+	routingModel string,
+	displayModel string,
+) noAccountErrorClassification {
+	return classifyNoAccountErrorFromGin(
+		c,
+		diag,
+		apiKey,
+		routingModel,
+		displayModel,
+		openAICompatibleRequestPlatform(apiKey),
+	)
+}
+
+func openAICompatibleSelectionErrorForLog(err error, platform string) error {
+	if err == nil || platform != service.PlatformGrok {
+		return err
+	}
+	message := strings.ReplaceAll(err.Error(), "OpenAI accounts", "Grok accounts")
+	if message == err.Error() {
+		return err
+	}
+	return fmt.Errorf("%s", message)
 }

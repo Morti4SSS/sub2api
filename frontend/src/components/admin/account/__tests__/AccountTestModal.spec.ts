@@ -284,4 +284,64 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  it('实际账号测试弹窗会显示固定账号网关诊断', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'glm-5.2', display_name: 'GLM 5.2' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"diagnostics","data":{"account_id":301,"account_name":"Claude relay A","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"glm-5.2","upstream_model":"glm-5.2","passthrough":true,"upstream_http_status":200}}\n',
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      id: 301,
+      name: 'Claude relay A',
+      platform: 'anthropic',
+      type: 'apikey',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    ;(wrapper.vm as any).selectedModelId = 'glm-5.2'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Claude relay A (#301)')
+    expect(wrapper.text()).toContain('claude_code_cli')
+    expect(wrapper.text()).toContain('glm-5.2 -> glm-5.2')
+    expect(wrapper.text()).toContain('HTTP 200')
+  })
+
+  it('实际账号测试弹窗会显示脱敏后的上游错误诊断', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'glm-5.2', display_name: 'GLM 5.2' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"diagnostics","data":{"account_id":303,"account_name":"Claude relay failure","client_identity":"claude_code_cli","gateway_path":"claude_messages","requested_model":"glm-5.2","upstream_model":"glm-5.2","passthrough":true,"upstream_http_status":404,"upstream_error_code":"upstream_model_not_found","upstream_error_reason":"model glm-5.2 not found; api_key=***"}}\n',
+        'data: {"type":"error","error":"Connection test failed"}\n'
+      ])
+    ) as any
+
+    const wrapper = mountModal({
+      id: 303,
+      name: 'Claude relay failure',
+      platform: 'anthropic',
+      type: 'apikey',
+      status: 'active'
+    })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    ;(wrapper.vm as any).selectedModelId = 'glm-5.2'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('admin.accounts.testDiagnosticErrorCode: upstream_model_not_found')
+    expect(wrapper.text()).toContain('admin.accounts.testDiagnosticErrorReason: model glm-5.2 not found; api_key=***')
+  })
 })

@@ -25,28 +25,23 @@ type gatewayModelsResponseForTest struct {
 }
 
 type gatewayModelItemForTest struct {
-	ID           string         `json:"id"`
-	Object       string         `json:"object"`
-	Type         string         `json:"type"`
-	Created      int64          `json:"created"`
-	OwnedBy      string         `json:"owned_by"`
-	DisplayName  string         `json:"display_name"`
-	CreatedAt    string         `json:"created_at"`
-	Capabilities []string       `json:"capabilities"`
-	Metadata     map[string]any `json:"metadata"`
+	ID                      string                                `json:"id"`
+	Object                  string                                `json:"object"`
+	Created                 int64                                 `json:"created"`
+	OwnedBy                 string                                `json:"owned_by"`
+	CreatedAt               string                                `json:"created_at"`
+	SupportsReasoningEffort bool                                  `json:"supportsReasoningEffort"`
+	ReasoningEffort         string                                `json:"reasoningEffort"`
+	ReasoningEfforts        []gatewayReasoningEffortOptionForTest `json:"reasoningEfforts"`
+}
+
+type gatewayReasoningEffortOptionForTest struct {
+	Value   string `json:"value"`
+	Label   string `json:"label"`
+	Default bool   `json:"default"`
 }
 
 func (s *gatewayModelsAccountRepoStub) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]service.Account, error) {
-	accounts, ok := s.byGroup[groupID]
-	if !ok {
-		return nil, nil
-	}
-	out := make([]service.Account, len(accounts))
-	copy(out, accounts)
-	return out, nil
-}
-
-func (s *gatewayModelsAccountRepoStub) ListByGroup(ctx context.Context, groupID int64) ([]service.Account, error) {
 	accounts, ok := s.byGroup[groupID]
 	if !ok {
 		return nil, nil
@@ -98,6 +93,50 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
 }
 
+func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(4409)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformGrok,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"grok-4.5": "grok-4.5"},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Data, 1)
+	model := got.Data[0]
+	require.Equal(t, "grok-4.5", model.ID)
+	require.True(t, model.SupportsReasoningEffort)
+	require.Equal(t, "high", model.ReasoningEffort)
+	require.Equal(t, []gatewayReasoningEffortOptionForTest{
+		{Value: "low", Label: "Low"},
+		{Value: "medium", Label: "Medium"},
+		{Value: "high", Label: "High", Default: true},
+	}, model.ReasoningEfforts)
+}
+
 func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -143,108 +182,6 @@ func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, []string{"gemini-2.5-flash"}, modelIDsForTest(got.Data))
-}
-
-func TestGatewayModels_ClaudeCodeUsesStableGroupCatalogInsteadOfAccountCatalog(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(31)
-	h := newGatewayModelsHandlerForTest(
-		&gatewayModelsAccountRepoStub{
-			byGroup: map[int64][]service.Account{
-				groupID: {
-					{
-						ID:       1,
-						Platform: service.PlatformAnthropic,
-						Type:     service.AccountTypeAPIKey,
-						Extra: map[string]any{
-							"claude_code_model_catalog": []any{
-								map[string]any{
-									"role":          "sonnet",
-									"display_name":  "Relay Sonnet",
-									"request_model": "relay-sonnet",
-									"supports_1m":   true,
-									"capabilities":  []any{"thinking", "effort"},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	c.Request.Header.Set("User-Agent", "claude-cli/2.1.156 (Claude Code)")
-	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{
-			ID:       groupID,
-			Platform: service.PlatformAnthropic,
-			ModelsListConfig: service.GroupModelsListConfig{
-				Enabled: true,
-				Models:  []string{"claude-opus-4-8"},
-			},
-		},
-	})
-
-	h.Models(c)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var got gatewayModelsResponseForTest
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, "list", got.Object)
-	require.Len(t, got.Data, 1)
-	require.Equal(t, "claude-opus-4-8", got.Data[0].ID)
-	require.Equal(t, "Claude Opus 4.8", got.Data[0].DisplayName)
-	require.NotContains(t, modelIDsForTest(got.Data), "relay-sonnet")
-}
-
-func TestGatewayModels_AnthropicGroupKeepsDefaultModelsForNonClaudeCodeClient(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(32)
-	h := newGatewayModelsHandlerForTest(
-		&gatewayModelsAccountRepoStub{
-			byGroup: map[int64][]service.Account{
-				groupID: {
-					{
-						ID:       1,
-						Platform: service.PlatformAnthropic,
-						Type:     service.AccountTypeAPIKey,
-						Extra: map[string]any{
-							"claude_code_model_catalog": []any{
-								map[string]any{
-									"role":          "sonnet",
-									"display_name":  "Relay Sonnet",
-									"request_model": "relay-sonnet",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	c.Request.Header.Set("User-Agent", "curl/8.0.0")
-	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
-	})
-
-	h.Models(c)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var got gatewayModelsResponseForTest
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.NotContains(t, modelIDsForTest(got.Data), "relay-sonnet")
-	require.Contains(t, modelIDsForTest(got.Data), "claude-sonnet-4-5-20250929")
 }
 
 func TestGatewayModels_CustomModelsListDisabledKeepsOriginalModels(t *testing.T) {

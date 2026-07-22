@@ -20,7 +20,9 @@ import type {
   CodexSessionImportResult,
   OpenAICodexPATCreateRequest,
   CheckMixedChannelRequest,
-  CheckMixedChannelResponse
+  CheckMixedChannelResponse,
+  UpstreamBillingProbeResult,
+  UpstreamBillingProbeSettings
 } from '@/types'
 
 /**
@@ -41,6 +43,7 @@ export async function list(
     search?: string
     privacy_mode?: string
     lite?: string
+    include_scheduler_score?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -76,6 +79,7 @@ export async function listWithEtag(
     search?: string
     privacy_mode?: string
     lite?: string
+    include_scheduler_score?: string
     sort_by?: string
     sort_order?: 'asc' | 'desc'
   },
@@ -133,6 +137,50 @@ export async function getById(id: number): Promise<Account> {
  */
 export async function create(accountData: CreateAccountRequest): Promise<Account> {
   const { data } = await apiClient.post<Account>('/admin/accounts', accountData)
+  return data
+}
+
+/**
+ * Duplicate an account while keeping credentials on the server.
+ * @param id - Source account ID
+ * @returns Newly created account
+ */
+const duplicateOperationKeys = new Map<number, string>()
+
+function duplicateOperationStorageKey(id: number): string {
+  return `sub2api:admin:account-duplicate:${id}`
+}
+
+function getStoredDuplicateOperationKey(id: number): string | null {
+  try {
+    return globalThis.sessionStorage?.getItem(duplicateOperationStorageKey(id)) ?? null
+  } catch {
+    return null
+  }
+}
+
+function storeDuplicateOperationKey(id: number, key: string | null): void {
+  try {
+    if (key) globalThis.sessionStorage?.setItem(duplicateOperationStorageKey(id), key)
+    else globalThis.sessionStorage?.removeItem(duplicateOperationStorageKey(id))
+  } catch {
+    // In-memory retry protection still works when browser storage is unavailable.
+  }
+}
+
+export async function duplicate(id: number): Promise<Account> {
+  let idempotencyKey = duplicateOperationKeys.get(id) ?? getStoredDuplicateOperationKey(id)
+  if (!idempotencyKey) {
+    const requestID = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    idempotencyKey = `account-duplicate-${id}-${requestID}`
+  }
+  duplicateOperationKeys.set(id, idempotencyKey)
+  storeDuplicateOperationKey(id, idempotencyKey)
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/duplicate`, undefined, {
+    headers: { 'Idempotency-Key': idempotencyKey }
+  })
+  duplicateOperationKeys.delete(id)
+  storeDuplicateOperationKey(id, null)
   return data
 }
 
@@ -474,21 +522,6 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
-export interface ClaudeCodeConfigOptions {
-  models: Array<{
-    id: string
-    type: string
-    display_name: string
-    created_at: string
-  }>
-  effort_levels: string[]
-}
-
-export async function getClaudeCodeOptions(): Promise<ClaudeCodeConfigOptions> {
-  const { data } = await apiClient.get<ClaudeCodeConfigOptions>('/admin/accounts/claude-code/options')
-  return data
-}
-
 export interface SyncUpstreamModelsResult {
   models: string[]
 }
@@ -498,9 +531,8 @@ export interface SyncUpstreamModelsResult {
  * @param id - Account ID
  * @returns List of model IDs returned by the upstream
  */
-export async function syncUpstreamModels(id: number, upstreamModelsUrl?: string): Promise<SyncUpstreamModelsResult> {
-  const payload = upstreamModelsUrl === undefined ? undefined : { upstream_models_url: upstreamModelsUrl }
-  const { data } = await apiClient.post<SyncUpstreamModelsResult>(`/admin/accounts/${id}/models/sync-upstream`, payload)
+export async function syncUpstreamModels(id: number): Promise<SyncUpstreamModelsResult> {
+  const { data } = await apiClient.post<SyncUpstreamModelsResult>(`/admin/accounts/${id}/models/sync-upstream`)
   return data
 }
 
@@ -509,7 +541,6 @@ export interface SyncUpstreamPreviewParams {
   type: string
   base_url?: string
   api_key: string
-  upstream_models_url?: string
 }
 
 /**
@@ -575,7 +606,9 @@ export async function syncFromCrs(params: {
       action: string
       error?: string
     }>
-  }>('/admin/accounts/sync/crs', params)
+  }>('/admin/accounts/sync/crs', params, {
+    timeout: 180000 // 180s timeout: sync refreshes each existing account's OAuth token serially
+  })
   return data
 }
 
@@ -817,11 +850,44 @@ export async function createSparkShadow(parentId: number, payload: SparkShadowCr
   return data
 }
 
+export async function getUpstreamBillingProbeSettings(): Promise<UpstreamBillingProbeSettings> {
+  const { data } = await apiClient.get<UpstreamBillingProbeSettings>('/admin/accounts/upstream-billing-probe/settings')
+  return data
+}
+
+export async function updateUpstreamBillingProbeSettings(
+  settings: UpstreamBillingProbeSettings
+): Promise<UpstreamBillingProbeSettings> {
+  const { data } = await apiClient.put<UpstreamBillingProbeSettings>(
+    '/admin/accounts/upstream-billing-probe/settings',
+    settings
+  )
+  return data
+}
+
+export async function setUpstreamBillingProbeEnabled(id: number, enabled: boolean): Promise<void> {
+  await apiClient.put(`/admin/accounts/${id}/upstream-billing-probe`, { enabled })
+}
+
+export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingProbeResult> {
+  const { data } = await apiClient.post<UpstreamBillingProbeResult>(`/admin/accounts/${id}/upstream-billing-probe`)
+  return data
+}
+
+export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<UpstreamBillingProbeResult[]> {
+  const { data } = await apiClient.post<{ results: UpstreamBillingProbeResult[] }>(
+    '/admin/accounts/upstream-billing-probe/batch',
+    { account_ids: accountIds }
+  )
+  return data.results
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
   getById,
   create,
+  duplicate,
   update,
   checkMixedChannelRisk,
   delete: deleteAccount,
@@ -862,7 +928,12 @@ export const accountsAPI = {
   revertProxyFallback,
   queryOpenAIQuota,
   resetOpenAIQuota,
-  createSparkShadow
+  createSparkShadow,
+  getUpstreamBillingProbeSettings,
+  updateUpstreamBillingProbeSettings,
+  setUpstreamBillingProbeEnabled,
+  probeUpstreamBilling,
+  probeUpstreamBillingBatch
 }
 
 export default accountsAPI

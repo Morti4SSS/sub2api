@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,25 @@ func upstreamModelSyncTestConfig() *config.Config {
 		Security: config.SecurityConfig{
 			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
 		},
+	}
+}
+
+func grokOAuthModelSyncTestAccount(baseURL string) *Account {
+	credentials := map[string]any{
+		"access_token":  "oauth-access-token",
+		"refresh_token": "oauth-refresh-token",
+		"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		"sub":           "grok-user-id",
+		"email":         "grok-user@example.com",
+	}
+	if strings.TrimSpace(baseURL) != "" {
+		credentials["base_url"] = baseURL
+	}
+	return &Account{
+		ID:          10,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Credentials: credentials,
 	}
 }
 
@@ -116,9 +136,9 @@ func TestExtractUpstreamModelIDs(t *testing.T) {
 			want: []string{"a-model", "z-model"},
 		},
 		{
-			name: "nested result data with strings and model field",
-			body: `{"result":{"data":["plain-model",{"model":"nested-model"}]}}`,
-			want: []string{"nested-model", "plain-model"},
+			name: "standard id wins over provider-specific model field",
+			body: `{"data":[{"id":"canonical-id","model":"display-model"}]}`,
+			want: []string{"canonical-id"},
 		},
 	}
 
@@ -132,6 +152,14 @@ func TestExtractUpstreamModelIDs(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestExtractGrokUpstreamModelIDs(t *testing.T) {
+	t.Parallel()
+
+	models, err := extractGrokUpstreamModelIDs([]byte(`{"data":[{"id":"display-id","model":"grok-4.5"},{"modelId":"grok-build-0.1"},{"model_id":"grok-composer-2.5-fast"},{"name":"Grok Meta Display Name","_meta":{"model":"grok-meta"}},{"name":"grok-name"},{"id":"grok-safe","_meta":"not-an-object"}]}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.5", "grok-build-0.1", "grok-composer-2.5-fast", "grok-meta", "grok-name", "grok-safe"}, models)
 }
 
 func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
@@ -182,6 +210,18 @@ func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
 	require.Equal(t, "https://openai.example.com/v1/models", openAIReq.URL.String())
 	require.Equal(t, "Bearer openai-key", openAIReq.Header.Get("Authorization"))
 
+	grokReq, err := svc.buildUpstreamModelsRequest(ctx, &Account{
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "xai-key",
+			"base_url": "https://xai.example.com/v1",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "https://xai.example.com/v1/models", grokReq.URL.String())
+	require.Equal(t, "Bearer xai-key", grokReq.Header.Get("Authorization"))
+
 	geminiReq, err := svc.buildGeminiUpstreamModelsRequest(ctx, &Account{
 		Platform: PlatformGemini,
 		Type:     AccountTypeAPIKey,
@@ -207,24 +247,36 @@ func TestBuildUpstreamModelsRequestsForAPIKeyAccounts(t *testing.T) {
 	require.Equal(t, "antigravity-key", antigravityReq.Header.Get("x-api-key"))
 }
 
-func TestBuildUpstreamModelsRequestUsesCustomFullURL(t *testing.T) {
+func TestBuildUpstreamModelsRequestSupportsGrokOAuth(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
+	req, err := svc.buildUpstreamModelsRequest(context.Background(), grokOAuthModelSyncTestAccount(""))
+	require.NoError(t, err)
+	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/models", req.URL.String())
+	require.Equal(t, "Bearer oauth-access-token", req.Header.Get("Authorization"))
+	require.Equal(t, grokCLIVersion, req.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, "interactive", req.Header.Get("X-Grok-Client-Mode"))
+	require.Equal(t, grokUpstreamUserAgent, req.Header.Get("User-Agent"))
+	require.Equal(t, "grok-user-id", req.Header.Get("X-UserID"))
+	require.Equal(t, "grok-user@example.com", req.Header.Get("X-Email"))
+	require.NotContains(t, req.Header.Get("Authorization"), "oauth-refresh-token")
+}
+
+func TestBuildUpstreamModelsRequestGrokOAuthRequiresTokenProvider(t *testing.T) {
 	t.Parallel()
 
 	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
-	req, err := svc.buildOpenAIUpstreamModelsRequest(context.Background(), &Account{
-		Platform: PlatformOpenAI,
-		Type:     AccountTypeAPIKey,
-		Credentials: map[string]any{
-			"api_key":  "openai-key",
-			"base_url": "https://openai.example.com/v1",
-		},
-		Extra: map[string]any{
-			"upstream_models_url": "https://relay.example.com/custom/catalog?tenant=secret",
-		},
-	})
+	_, err := svc.buildUpstreamModelsRequest(context.Background(), grokOAuthModelSyncTestAccount(""))
+	require.Error(t, err)
 
-	require.NoError(t, err)
-	require.Equal(t, "https://relay.example.com/custom/catalog?tenant=secret", req.URL.String())
+	var syncErr *UpstreamModelSyncError
+	require.True(t, errors.As(err, &syncErr))
+	require.Equal(t, UpstreamModelSyncErrorConfiguration, syncErr.Kind)
+	require.Contains(t, syncErr.SafeMessage(), "token provider")
 }
 
 func TestBuildAntigravityAPIKeyModelsRequestRejectsOfficialCloudCodeBase(t *testing.T) {
@@ -290,6 +342,73 @@ func TestFetchUpstreamSupportedModelsParsesOpenAIResponse(t *testing.T) {
 	require.Equal(t, "Bearer openai-key", upstream.lastReq.Header.Get("Authorization"))
 }
 
+func TestFetchUpstreamSupportedModelsParsesGrokAPIKeyResponse(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"grok-4.5"},{"id":"grok-4.5"},{"id":"grok-imagine"}]}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+		cfg:          upstreamModelSyncTestConfig(),
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+		ID:       9,
+		Platform: PlatformGrok,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "xai-key",
+			"base_url": "https://xai.example.com/v1",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.5", "grok-imagine"}, models)
+	require.Equal(t, "https://xai.example.com/v1/models", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer xai-key", upstream.lastReq.Header.Get("Authorization"))
+}
+
+func TestFetchUpstreamSupportedModelsParsesGrokOAuthResponse(t *testing.T) {
+	t.Parallel()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"model":"grok-4.5"},{"model":"grok-4.5"},{"modelId":"grok-build-0.1"}]}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream:      upstream,
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), grokOAuthModelSyncTestAccount(""))
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.5", "grok-build-0.1"}, models)
+	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/models", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer oauth-access-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, grokCLIVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, "interactive", upstream.lastReq.Header.Get("X-Grok-Client-Mode"))
+	require.Equal(t, "grok-user-id", upstream.lastReq.Header.Get("X-UserID"))
+	require.Equal(t, "grok-user@example.com", upstream.lastReq.Header.Get("X-Email"))
+}
+
+func TestBuildUpstreamModelsRequestGrokOAuthDoesNotSendIdentityToCustomBase(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
+	req, err := svc.buildUpstreamModelsRequest(context.Background(), grokOAuthModelSyncTestAccount("https://relay.example/v1"))
+	require.NoError(t, err)
+	require.Equal(t, "https://relay.example/v1/models", req.URL.String())
+	require.Empty(t, req.Header.Get("X-UserID"))
+	require.Empty(t, req.Header.Get("X-Email"))
+}
+
 func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {
 	t.Parallel()
 
@@ -320,95 +439,4 @@ func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {
 	require.Equal(t, UpstreamModelSyncErrorUpstream, syncErr.Kind)
 	require.NotContains(t, syncErr.SafeMessage(), "SECRET_TOKEN")
 	require.Contains(t, syncErr.SafeMessage(), "HTTP 502")
-}
-
-func TestFetchUpstreamSupportedModelsReturnsRedactedHTTPDiagnostics(t *testing.T) {
-	t.Parallel()
-
-	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound} {
-		status := status
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			t.Parallel()
-			upstream := &httpUpstreamRecorder{resp: &http.Response{
-				StatusCode: status,
-				Header:     http.Header{"Content-Type": []string{"application/json; charset=utf-8"}},
-				Body:       io.NopCloser(strings.NewReader(`{"error":"SECRET_RESPONSE"}`)),
-			}}
-			svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
-
-			_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
-				ID: 9, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-				Credentials: map[string]any{"api_key": "openai-key", "base_url": "https://openai.example.com/v1"},
-				Extra:       map[string]any{"upstream_models_url": "https://relay.example.com/custom/catalog?token=SECRET_QUERY"},
-			})
-
-			var syncErr *UpstreamModelSyncError
-			require.ErrorAs(t, err, &syncErr)
-			require.Equal(t, status, syncErr.HTTPStatus)
-			require.Equal(t, "https://relay.example.com/custom/catalog", syncErr.RequestURL)
-			require.Equal(t, "application/json", syncErr.ContentType)
-			require.NotContains(t, syncErr.SafeMessage(), "SECRET")
-			require.NotContains(t, syncErr.SafeMetadata()["request_url"], "SECRET")
-		})
-	}
-}
-
-func TestFetchUpstreamSupportedModelsClassifiesHTMLAndUnsupportedJSON(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		contentType string
-		body        string
-		wantShape   string
-	}{
-		{name: "cloudflare html", contentType: "text/html", body: `<html>SECRET_CHALLENGE</html>`, wantShape: "html"},
-		{name: "unsupported json object", contentType: "application/json", body: `{"object":"list","items":[]}`, wantShape: "object-without-model-array"},
-		{name: "empty array", contentType: "application/json", body: `[]`, wantShape: "array"},
-	}
-
-	for _, test := range tests {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			upstream := &httpUpstreamRecorder{resp: &http.Response{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{test.contentType}},
-				Body:       io.NopCloser(strings.NewReader(test.body)),
-			}}
-			svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
-
-			_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
-				ID: 10, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-				Credentials: map[string]any{"api_key": "openai-key", "base_url": "https://openai.example.com/v1"},
-			})
-
-			var syncErr *UpstreamModelSyncError
-			require.ErrorAs(t, err, &syncErr)
-			require.Equal(t, test.wantShape, syncErr.ResponseShape)
-			require.NotContains(t, syncErr.SafeMessage(), "SECRET")
-		})
-	}
-}
-
-func TestFetchUpstreamSupportedModelsRejectsOversizedResponseWithDiagnostics(t *testing.T) {
-	t.Parallel()
-
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", int(upstreamModelsBodyLimit+1)))),
-	}}
-	svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
-
-	_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
-		ID: 11, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "openai-key", "base_url": "https://openai.example.com/v1"},
-	})
-
-	var syncErr *UpstreamModelSyncError
-	require.ErrorAs(t, err, &syncErr)
-	require.Equal(t, http.StatusOK, syncErr.HTTPStatus)
-	require.Equal(t, "application/json", syncErr.ContentType)
-	require.Equal(t, "too-large", syncErr.ResponseShape)
 }

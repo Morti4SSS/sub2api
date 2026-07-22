@@ -29,6 +29,17 @@ func TestBuildFailoverExhaustedClientMessageRedactsSecrets(t *testing.T) {
 	require.NotContains(t, got, "rt-secret")
 }
 
+func TestBuildFailoverExhaustedClientMessageRedactsBearerToken(t *testing.T) {
+	err := &UpstreamFailoverError{
+		StatusCode:   http.StatusUnauthorized,
+		ResponseBody: []byte(`{"error":{"message":"authorization: Bearer relay-secret"}}`),
+	}
+
+	got := BuildFailoverExhaustedClientMessage("Service temporarily unavailable", err)
+	require.NotContains(t, got, "relay-secret")
+	require.Contains(t, got, "authorization=***")
+}
+
 func TestDescribeUpstreamFailoverErrorClassifiesModelNotFound(t *testing.T) {
 	details := DescribeUpstreamFailoverError(&UpstreamFailoverError{
 		StatusCode:   http.StatusNotFound,

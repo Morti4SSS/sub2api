@@ -43,7 +43,7 @@ func TestResolveAccountUpstreamModel_Antigravity(t *testing.T) {
 		Platform: PlatformAntigravity,
 	}
 	// Antigravity 平台使用 DefaultAntigravityModelMapping
-	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
+	got := resolveAccountUpstreamModel(account, "claude-sonnet-4-6")
 	require.Equal(t, "claude-sonnet-4-6", got)
 }
 
@@ -52,7 +52,7 @@ func TestResolveAccountUpstreamModel_Antigravity_Unsupported(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAntigravity,
 	}
-	got := resolveAccountUpstreamModel(context.Background(), account, "totally-unknown-model")
+	got := resolveAccountUpstreamModel(account, "totally-unknown-model")
 	require.Equal(t, "", got, "unsupported model should return empty")
 }
 
@@ -61,28 +61,8 @@ func TestResolveAccountUpstreamModel_NonAntigravity(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAnthropic,
 	}
-	got := resolveAccountUpstreamModel(context.Background(), account, "claude-sonnet-4-6")
+	got := resolveAccountUpstreamModel(account, "claude-sonnet-4-6")
 	require.Equal(t, "claude-sonnet-4-6", got, "no mapping = passthrough")
-}
-
-func TestResolveAccountUpstreamModel_ClaudeCodeCatalog(t *testing.T) {
-	t.Parallel()
-	account := &Account{
-		Platform: PlatformAnthropic,
-		Extra: map[string]any{
-			"claude_code_model_catalog": []any{
-				map[string]any{
-					"role":           "sonnet",
-					"display_name":   "Relay Sonnet",
-					"request_model":  "relay-sonnet",
-					"upstream_model": "upstream-sonnet",
-				},
-			},
-		},
-	}
-	ctx := SetClaudeCodeClient(context.Background(), true)
-	got := resolveAccountUpstreamModel(ctx, account, "relay-sonnet")
-	require.Equal(t, "upstream-sonnet", got)
 }
 
 // --- checkChannelPricingRestriction ---

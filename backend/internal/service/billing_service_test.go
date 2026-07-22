@@ -261,6 +261,23 @@ func TestCalculateCost_OpenAIGPT54LongContextAppliesWholeSessionMultipliers(t *t
 	require.InDelta(t, expectedOutput, cost.OutputCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.TotalCost, 1e-10)
 	require.InDelta(t, expectedInput+expectedOutput, cost.ActualCost, 1e-10)
+	require.True(t, cost.LongContextBillingApplied)
+}
+
+func TestCalculateCost_OpenAIGPT54LongContextMarkerRequiresActualCostIncrease(t *testing.T) {
+	svc := newTestBillingService()
+
+	cost, err := svc.calculateCostWithServiceTierPolicy(
+		"gpt-5.4-2026-03-05",
+		UsageTokens{InputTokens: 300000},
+		0,
+		"",
+		true,
+	)
+
+	require.NoError(t, err)
+	require.Zero(t, cost.ActualCost)
+	require.False(t, cost.LongContextBillingApplied)
 }
 
 func TestCalculateCost_OpenAIGPT55ProUsesGPT55PricingPolicy(t *testing.T) {
@@ -738,7 +755,7 @@ func TestGetModelPricing_DoubaoEmbeddingVisionImageInputRate(t *testing.T) {
 	}
 }
 
-// 验证双档计费：InputCost = 文本token×文本价 + 图片token×图片价；
+// 验证双档计费：InputCost = 文本token×文本价（不含图片），ImageInputCost = 图片token×图片价；
 // 且 ImageInputTokens=0 时走原单价路径，ImageInputTokens>InputTokens 时不负计文本。
 func TestCalculateCost_DoubaoEmbeddingVisionDifferentialInput(t *testing.T) {
 	svc := newTestBillingService()
@@ -747,22 +764,60 @@ func TestCalculateCost_DoubaoEmbeddingVisionDifferentialInput(t *testing.T) {
 	mixed := UsageTokens{InputTokens: 1340, ImageInputTokens: 28}
 	cost, err := svc.CalculateCost("doubao-embedding-vision", mixed, 1.0)
 	require.NoError(t, err)
-	wantMixed := float64(1312)*0.098e-6 + float64(28)*0.252e-6
-	require.InDelta(t, wantMixed, cost.InputCost, 1e-15)
-	require.InDelta(t, wantMixed, cost.TotalCost, 1e-15)
+	wantText := float64(1312) * 0.098e-6
+	wantImage := float64(28) * 0.252e-6
+	require.InDelta(t, wantText, cost.InputCost, 1e-15, "InputCost 仅计文本输入")
+	require.InDelta(t, wantImage, cost.ImageInputCost, 1e-15, "ImageInputCost 单独计图片输入")
+	require.InDelta(t, wantText+wantImage, cost.TotalCost, 1e-15, "TotalCost 口径不变")
 	require.Zero(t, cost.OutputCost)
 
-	// 纯文本：全部按文本档计费，与原单价路径一致。
+	// 纯文本：全部按文本档计费，与原单价路径一致，无图片输入费用。
 	textOnly := UsageTokens{InputTokens: 1340}
 	costText, err := svc.CalculateCost("doubao-embedding-vision", textOnly, 1.0)
 	require.NoError(t, err)
 	require.InDelta(t, float64(1340)*0.098e-6, costText.InputCost, 1e-15)
+	require.Zero(t, costText.ImageInputCost)
 
 	// 健壮性：ImageInputTokens 超过 InputTokens 时，文本置 0、计费 token 不超过 InputTokens。
 	weird := UsageTokens{InputTokens: 10, ImageInputTokens: 50}
 	costWeird, err := svc.CalculateCost("doubao-embedding-vision", weird, 1.0)
 	require.NoError(t, err)
-	require.InDelta(t, float64(10)*0.252e-6, costWeird.InputCost, 1e-15)
+	require.Zero(t, costWeird.InputCost, "全为图片输入时文本费用为 0")
+	require.InDelta(t, float64(10)*0.252e-6, costWeird.ImageInputCost, 1e-15)
+	require.InDelta(t, float64(10)*0.252e-6, costWeird.TotalCost, 1e-15)
+}
+
+// 复现 issue #4386：gpt-image-2 /v1/images/edits 带 1 张输入图。
+// 上游 usage：input_tokens=371（image_tokens=352 + text_tokens=19），
+// output_tokens=439（全部图片输出）。官方定价：文本输入 $5/1M、图片输入 $8/1M、
+// 文本输出 $10/1M、图片输出 $30/1M。修复前图片输入被并入文本价，单次偏低 ~6.6%。
+func TestComputeTokenBreakdown_GptImage2ImageEditIssue4386(t *testing.T) {
+	svc := newTestBillingService()
+
+	pricing := &ModelPricing{
+		InputPricePerToken:       5e-6,
+		ImageInputPricePerToken:  8e-6,
+		OutputPricePerToken:      10e-6,
+		ImageOutputPricePerToken: 30e-6,
+		ImageOutputPriceExplicit: true,
+	}
+	tokens := UsageTokens{
+		InputTokens:       371,
+		ImageInputTokens:  352,
+		OutputTokens:      439,
+		ImageOutputTokens: 439,
+	}
+
+	cost := svc.computeTokenBreakdown(pricing, tokens, 1.0, "", false)
+
+	wantTextInput := float64(19) * 5e-6    // 0.000095
+	wantImageInput := float64(352) * 8e-6  // 0.002816
+	wantImageOutput := float64(439) * 30e-6 // 0.013170
+	require.InDelta(t, wantTextInput, cost.InputCost, 1e-15, "InputCost 仅含文本输入")
+	require.InDelta(t, wantImageInput, cost.ImageInputCost, 1e-15, "图片输入按 $8/1M 独立计费")
+	require.Zero(t, cost.OutputCost, "输出全部为图片，文本输出费用为 0")
+	require.InDelta(t, wantImageOutput, cost.ImageOutputCost, 1e-15)
+	require.InDelta(t, 0.016081, cost.TotalCost, 1e-9, "总额应为 $0.016081（修复前为 $0.015025）")
 }
 func TestCalculateCostWithLongContext_BelowThreshold(t *testing.T) {
 	svc := newTestBillingService()
@@ -831,6 +886,17 @@ func TestCalculateCostWithLongContext_AboveThreshold_CacheBelowThreshold(t *test
 	require.True(t, cost.ActualCost > normalCost.ActualCost, "长上下文费用应高于正常费用")
 }
 
+func TestCalculateCostWithLongContext_MarkerRequiresActualCostIncrease(t *testing.T) {
+	svc := newTestBillingService()
+	tokens := UsageTokens{InputTokens: 300000}
+
+	cost, err := svc.CalculateCostWithLongContext("claude-sonnet-4", tokens, 0, 200000, 2.0)
+
+	require.NoError(t, err)
+	require.Zero(t, cost.ActualCost)
+	require.False(t, cost.LongContextBillingApplied)
+}
+
 func TestCalculateCostWithLongContext_DisabledThreshold(t *testing.T) {
 	svc := newTestBillingService()
 
@@ -870,6 +936,66 @@ func TestCalculateImageCost(t *testing.T) {
 
 	require.InDelta(t, 0.134*3, cost.TotalCost, 1e-10)
 	require.InDelta(t, 0.134*3, cost.ActualCost, 1e-10)
+}
+
+func TestCalculateVideoCostUsesSeparateConfig(t *testing.T) {
+	svc := newTestBillingService()
+
+	imagePrice := 0.4
+	videoPrice := 0.08
+	imageCost := svc.CalculateImageCost("grok-imagine-video", "2K", 1, &ImagePriceConfig{Price2K: &imagePrice}, 1.0)
+	videoCost := svc.CalculateVideoCost("grok-imagine-video", "480p", 1, 10, &VideoPriceConfig{Price480P: &videoPrice}, 0.5)
+
+	require.InDelta(t, 0.4, imageCost.TotalCost, 1e-10)
+	require.InDelta(t, 0.8, videoCost.TotalCost, 1e-10)
+	require.InDelta(t, 0.4, videoCost.ActualCost, 1e-10)
+	require.Equal(t, string(BillingModeVideo), videoCost.BillingMode)
+}
+
+func TestCalculateVideoCostBillsPerSecond(t *testing.T) {
+	svc := newTestBillingService()
+
+	oneSecond := svc.CalculateVideoCost("grok-imagine-video", "720p", 1, 1, nil, 1.0)
+	fifteenSeconds := svc.CalculateVideoCost("grok-imagine-video", "720p", 1, 15, nil, 1.0)
+	// duration <=0 时按上游默认 8 秒计费，超出上限按 15 秒收敛。
+	defaultDuration := svc.CalculateVideoCost("grok-imagine-video", "720p", 1, 0, nil, 1.0)
+	clampedDuration := svc.CalculateVideoCost("grok-imagine-video", "720p", 1, 999, nil, 1.0)
+
+	require.InDelta(t, 0.07, oneSecond.TotalCost, 1e-10)
+	require.InDelta(t, 0.07*15, fifteenSeconds.TotalCost, 1e-10)
+	require.InDelta(t, 0.07*8, defaultDuration.TotalCost, 1e-10)
+	require.InDelta(t, 0.07*15, clampedDuration.TotalCost, 1e-10)
+}
+
+func TestCalculateGrokImagineImageCostUsesDefaultRateCard(t *testing.T) {
+	svc := newTestBillingService()
+
+	standard1K := svc.CalculateImageCost("grok-imagine-image", "1K", 1, nil, 1.0)
+	standard2K := svc.CalculateImageCost("grok-imagine-image", "2K", 1, nil, 1.0)
+	quality1K := svc.CalculateImageCost("grok-imagine-image-quality", "1K", 1, nil, 1.0)
+	quality2K := svc.CalculateImageCost("grok-imagine-image-quality", "2K", 1, nil, 1.0)
+
+	require.InDelta(t, 0.02, standard1K.TotalCost, 1e-10)
+	require.InDelta(t, 0.02, standard2K.TotalCost, 1e-10)
+	require.InDelta(t, 0.05, quality1K.TotalCost, 1e-10)
+	require.InDelta(t, 0.07, quality2K.TotalCost, 1e-10)
+}
+
+func TestCalculateGrokImagineVideoCostUsesDefaultRateCard(t *testing.T) {
+	svc := newTestBillingService()
+
+	// 默认价目为 xAI 官方每秒价格，按 1 秒时长验证每秒单价。
+	standard480P := svc.CalculateVideoCost("grok-imagine-video", "480p", 1, 1, nil, 1.0)
+	standard720P := svc.CalculateVideoCost("grok-imagine-video", "720p", 1, 1, nil, 1.0)
+	video15_480P := svc.CalculateVideoCost("grok-imagine-video-1.5", "480p", 1, 1, nil, 1.0)
+	video15_720P := svc.CalculateVideoCost("grok-imagine-video-1.5", "720p", 1, 1, nil, 1.0)
+	video15_1080P := svc.CalculateVideoCost("grok-imagine-video-1.5", "1080p", 1, 1, nil, 1.0)
+
+	require.InDelta(t, 0.05, standard480P.TotalCost, 1e-10)
+	require.InDelta(t, 0.07, standard720P.TotalCost, 1e-10)
+	require.InDelta(t, 0.08, video15_480P.TotalCost, 1e-10)
+	require.InDelta(t, 0.14, video15_720P.TotalCost, 1e-10)
+	require.InDelta(t, 0.25, video15_1080P.TotalCost, 1e-10)
 }
 
 func TestIsModelSupported(t *testing.T) {
@@ -961,6 +1087,74 @@ func TestCalculateCostWithLongContext_PropagatesError(t *testing.T) {
 	_, err := svc.CalculateCostWithLongContext("unknown-model", tokens, 1.0, 200000, 2.0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pricing not found")
+}
+
+func TestGetModelPricing_Grok45OfficialFallback(t *testing.T) {
+	svc := newTestBillingService()
+
+	for _, model := range []string{"grok", "grok-latest", "grok-4.5", "grok-4.5-latest", "grok-build-latest"} {
+		model := model
+		t.Run(model, func(t *testing.T) {
+			pricing, err := svc.GetModelPricing(model)
+			require.NoError(t, err)
+			require.InDelta(t, 2e-6, pricing.InputPricePerToken, 1e-12)
+			require.InDelta(t, 6e-6, pricing.OutputPricePerToken, 1e-12)
+			require.InDelta(t, 0.5e-6, pricing.CacheReadPricePerToken, 1e-12)
+			require.False(t, pricing.SupportsCacheBreakdown)
+		})
+	}
+}
+
+func TestGetModelPricing_GrokCatalogFallbacks(t *testing.T) {
+	svc := newTestBillingService()
+
+	tests := []struct {
+		name      string
+		models    []string
+		input     float64
+		cacheRead float64
+		output    float64
+	}{
+		{
+			name: "Grok 4.3 family",
+			models: []string{
+				"grok-4.3",
+				"grok-4.20-0309-reasoning",
+				"grok-4.20-0309-non-reasoning",
+				"grok-4.20-multi-agent-0309",
+				"grok-4.20-reasoning",
+				"grok-4.20-non-reasoning",
+			},
+			input:     1.25e-6,
+			cacheRead: 0.2e-6,
+			output:    2.5e-6,
+		},
+		{
+			name: "Grok coding and Composer family",
+			models: []string{
+				"grok-build",
+				"grok-build-0.1",
+				"grok-composer",
+				"grok-composer-2.5-fast",
+				"composer-2.5",
+			},
+			input:     1e-6,
+			cacheRead: 0.2e-6,
+			output:    2e-6,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, model := range tt.models {
+				pricing, err := svc.GetModelPricing(model)
+				require.NoError(t, err, "model %s", model)
+				require.InDelta(t, tt.input, pricing.InputPricePerToken, 1e-12, "model %s input", model)
+				require.InDelta(t, tt.cacheRead, pricing.CacheReadPricePerToken, 1e-12, "model %s cached input", model)
+				require.InDelta(t, tt.output, pricing.OutputPricePerToken, 1e-12, "model %s output", model)
+			}
+		})
+	}
 }
 
 func TestCalculateCost_SupportsCacheBreakdown(t *testing.T) {

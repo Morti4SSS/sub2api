@@ -253,6 +253,7 @@ import TextArea from '@/components/common/TextArea.vue'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
+import { ADMIN_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import { adminAPI } from '@/api/admin'
 import type { Account, ClaudeModel } from '@/types'
 
@@ -465,7 +466,8 @@ const startTest = async () => {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        [ADMIN_UI_REQUEST_HEADER]: '1'
       },
       body: JSON.stringify(requestBody),
       signal: abortController.signal
@@ -525,6 +527,18 @@ const handleEvent = (event: {
   error?: string
   image_url?: string
   mime_type?: string
+  data?: {
+    account_id?: number
+    account_name?: string
+    client_identity?: string
+    gateway_path?: string
+    requested_model?: string
+    upstream_model?: string
+    passthrough?: boolean
+    upstream_http_status?: number
+    upstream_error_code?: string
+    upstream_error_reason?: string
+  }
 }) => {
   switch (event.type) {
     case 'test_start':
@@ -566,6 +580,36 @@ const handleEvent = (event: {
         addLine(event.text, 'text-cyan-300')
       }
       break
+
+    case 'diagnostics': {
+      const data = event.data
+      if (!data) break
+      if (data.account_name && data.account_id != null) {
+        addLine(`${t('admin.accounts.testDiagnosticAccount')}: ${data.account_name} (#${data.account_id})`, 'text-cyan-300')
+      }
+      if (data.client_identity) {
+        addLine(`${t('admin.accounts.testDiagnosticClient')}: ${data.client_identity}`, 'text-cyan-300')
+      }
+      if (data.gateway_path) {
+        addLine(`${t('admin.accounts.testDiagnosticGateway')}: ${data.gateway_path}`, 'text-cyan-300')
+      }
+      if (data.requested_model && data.upstream_model) {
+        addLine(`${t('admin.accounts.testDiagnosticModel')}: ${data.requested_model} -> ${data.upstream_model}`, 'text-cyan-300')
+      }
+      if (data.passthrough != null) {
+        addLine(`${t('admin.accounts.testDiagnosticPassthrough')}: ${String(data.passthrough)}`, 'text-cyan-300')
+      }
+      if (data.upstream_http_status != null) {
+        addLine(`${t('admin.accounts.testDiagnosticHTTP')}: HTTP ${data.upstream_http_status}`, 'text-cyan-300')
+      }
+      if (data.upstream_error_code) {
+        addLine(`${t('admin.accounts.testDiagnosticErrorCode')}: ${data.upstream_error_code}`, 'text-red-300')
+      }
+      if (data.upstream_error_reason) {
+        addLine(`${t('admin.accounts.testDiagnosticErrorReason')}: ${data.upstream_error_reason}`, 'text-red-300')
+      }
+      break
+    }
 
     case 'test_complete':
       // Move streaming content to output lines
